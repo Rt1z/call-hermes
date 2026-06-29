@@ -68,8 +68,10 @@ async def lifespan(_app: FastAPI):
     else:
         logger.info("TURN configured urls=%s", settings.ice_turn_urls)
     logger.info(
-        "voice settings prebuffer=%.2fs barge_in_min_chars=%d barge_in_cooldown_ms=%d",
+        "voice settings prebuffer=%.2fs vad_preroll_ms=%d "
+        "barge_in_min_chars=%d barge_in_cooldown_ms=%d",
         settings.webrtc_audio_prebuffer_seconds,
+        settings.auto_vad_preroll_ms,
         settings.barge_in_min_chars,
         settings.barge_in_cooldown_ms,
     )
@@ -107,7 +109,12 @@ async def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[s
     config = settings.diagnostics()
     return {
         "ok": hermes_ok and asr_ok and tts_ok and bool(config["ok"]),
-        "hermes": {"ok": hermes_ok, "detail": hermes_detail},
+        "hermes": {
+            "ok": hermes_ok,
+            "detail": hermes_detail,
+            "history_max_turns": settings.hermes_history_max_turns,
+            "history_max_chars": settings.hermes_history_max_chars,
+        },
         "asr": {
             "ok": asr_ok,
             "model": settings.dashscope_asr_model,
@@ -125,9 +132,13 @@ async def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[s
             "turn_warning": settings.turn_config_warning,
             "ice_servers": len(settings.ice_servers),
             "audio_prebuffer_seconds": settings.webrtc_audio_prebuffer_seconds,
+            "adaptive_buffer_enabled": settings.webrtc_adaptive_buffer_enabled,
+            "audio_prebuffer_min_seconds": settings.webrtc_audio_prebuffer_min_seconds,
+            "audio_prebuffer_max_seconds": settings.webrtc_audio_prebuffer_max_seconds,
             "auto_vad_enabled": settings.auto_vad_enabled,
             "auto_vad_rms_threshold": settings.auto_vad_rms_threshold,
             "auto_vad_silence_ms": settings.auto_vad_silence_ms,
+            "auto_vad_preroll_ms": settings.auto_vad_preroll_ms,
             "barge_in_min_chars": settings.barge_in_min_chars,
         },
         "config": config,
@@ -171,11 +182,16 @@ async def rtc_offer(
 ) -> OfferResponse:
     session_id = verify_bearer_token(settings, authorization)
     old = sessions.pop(session_id, None)
+    conversation_history = old.conversation_history if old else []
     if old:
         await old.close()
 
     session_settings = _settings_for_offer(settings, body)
-    session = VoiceBridgeSession(session_id, session_settings)
+    session = VoiceBridgeSession(
+        session_id,
+        session_settings,
+        conversation_history=conversation_history,
+    )
     sessions[session_id] = session
     answer = await session.answer(body.sdp, body.type)
     return OfferResponse(**answer, ice_servers=session_settings.ice_servers)
@@ -189,6 +205,12 @@ async def rtc_config(
     verify_bearer_token(settings, authorization)
     return {
         "ice_servers": settings.ice_servers,
+        "audio": {
+            "adaptive_buffer_enabled": settings.webrtc_adaptive_buffer_enabled,
+            "prebuffer_seconds": settings.webrtc_audio_prebuffer_seconds,
+            "prebuffer_min_seconds": settings.webrtc_audio_prebuffer_min_seconds,
+            "prebuffer_max_seconds": settings.webrtc_audio_prebuffer_max_seconds,
+        },
         "tts": {
             "voice": settings.dashscope_tts_voice,
             "speech_rate": settings.dashscope_tts_speech_rate,

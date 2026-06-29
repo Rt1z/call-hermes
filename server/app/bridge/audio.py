@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import time
 from fractions import Fraction
 
@@ -29,13 +30,18 @@ class QueueAudioTrack(AudioStreamTrack):
         sample_rate: int = 48000,
         frame_samples: int = 960,
         prebuffer_seconds: float = 0.5,
+        min_prebuffer_seconds: float = 0.0,
+        max_prebuffer_seconds: float = 1.0,
         logger: logging.Logger | None = None,
         session_id: str = "-",
     ) -> None:
         super().__init__()
         self.sample_rate = sample_rate
         self.frame_samples = frame_samples
-        self.prebuffer_bytes = int(sample_rate * 2 * prebuffer_seconds)
+        self.min_prebuffer_seconds = min(min_prebuffer_seconds, max_prebuffer_seconds)
+        self.max_prebuffer_seconds = max(min_prebuffer_seconds, max_prebuffer_seconds)
+        self.prebuffer_seconds = 0.0
+        self.prebuffer_bytes = 0
         self._logger = logger
         self._session_id = session_id
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=100)
@@ -49,9 +55,27 @@ class QueueAudioTrack(AudioStreamTrack):
         self._queued_bytes = 0
         self._played_bytes = 0
         self._underrun_frames = 0
+        self._rebuffer_count = 0
         self._started_playback_at: float | None = None
         self._idle_event = asyncio.Event()
         self._idle_event.set()
+        self.set_prebuffer_seconds(prebuffer_seconds)
+
+    def set_prebuffer_seconds(self, seconds: float) -> float:
+        if not math.isfinite(seconds):
+            raise ValueError("prebuffer seconds must be finite")
+        normalized = min(self.max_prebuffer_seconds, max(self.min_prebuffer_seconds, seconds))
+        self.prebuffer_seconds = normalized
+        self.prebuffer_bytes = int(self.sample_rate * 2 * normalized)
+        if self._logger:
+            self._logger.info(
+                "session_id=%s audio prebuffer updated seconds=%.2f bytes=%d playing=%s",
+                self._session_id,
+                normalized,
+                self.prebuffer_bytes,
+                self._playing_audio,
+            )
+        return normalized
 
     async def push_pcm16(self, pcm: bytes, sample_rate: int) -> None:
         self._idle_event.clear()
@@ -90,6 +114,7 @@ class QueueAudioTrack(AudioStreamTrack):
         self._queued_bytes = 0
         self._played_bytes = 0
         self._underrun_frames = 0
+        self._rebuffer_count = 0
         self._started_playback_at = None
         self._idle_event.set()
         while True:
@@ -111,17 +136,24 @@ class QueueAudioTrack(AudioStreamTrack):
             raise MediaStreamError
 
         if self._started_at is None:
-            self._started_at = time.time()
+            self._started_at = time.monotonic()
         else:
             next_time = self._started_at + (self._pts / self.sample_rate)
-            await asyncio.sleep(max(0, next_time - time.time()))
+            now = time.monotonic()
+            frame_seconds = self.frame_samples / self.sample_rate
+            if now - next_time > frame_seconds * 2:
+                # Do not burst stale RTP frames after an event-loop or network stall.
+                self._started_at = now - (self._pts / self.sample_rate)
+                next_time = now
+            await asyncio.sleep(max(0, next_time - now))
 
         self._drain_queue()
         bytes_needed = self.frame_samples * 2
         has_enough_prebuffer = len(self._buffer) >= self.prebuffer_bytes
         if self._buffer and not self._playing_audio and (has_enough_prebuffer or self._flush_audio):
             self._playing_audio = True
-            self._started_playback_at = time.time()
+            if self._started_playback_at is None:
+                self._started_playback_at = time.monotonic()
             if self._logger:
                 self._logger.info(
                     "session_id=%s audio playback start buffered_ms=%d flush=%s queue_size=%d",
@@ -129,6 +161,19 @@ class QueueAudioTrack(AudioStreamTrack):
                     int(len(self._buffer) / (self.sample_rate * 2) * 1000),
                     self._flush_audio,
                     self._queue.qsize(),
+                )
+
+        if self._playing_audio and len(self._buffer) < bytes_needed and not self._flush_audio:
+            self._playing_audio = False
+            self._underrun_frames += 1
+            self._rebuffer_count += 1
+            if self._logger:
+                self._logger.warning(
+                    "session_id=%s audio underrun rebuffer=%d buffered_bytes=%d target_bytes=%d",
+                    self._session_id,
+                    self._rebuffer_count,
+                    len(self._buffer),
+                    self.prebuffer_bytes,
                 )
 
         if self._playing_audio and (len(self._buffer) >= bytes_needed or self._flush_audio):
@@ -139,28 +184,29 @@ class QueueAudioTrack(AudioStreamTrack):
             self._played_bytes += bytes_needed
         else:
             pcm = b"\x00" * bytes_needed
-            if self._playing_audio:
-                self._underrun_frames += 1
 
         if self._playing_audio and self._flush_audio and not self._buffer and self._queue.empty():
             if self._logger:
                 elapsed_ms = (
-                    int((time.time() - self._started_playback_at) * 1000)
+                    int((time.monotonic() - self._started_playback_at) * 1000)
                     if self._started_playback_at
                     else 0
                 )
                 self._logger.info(
-                    "session_id=%s audio playback end elapsed_ms=%d played_bytes=%d underruns=%d",
+                    "session_id=%s audio playback end elapsed_ms=%d played_bytes=%d "
+                    "underruns=%d rebuffers=%d",
                     self._session_id,
                     elapsed_ms,
                     self._played_bytes,
                     self._underrun_frames,
+                    self._rebuffer_count,
                 )
             self._playing_audio = False
             self._flush_audio = False
             self._queued_bytes = 0
             self._played_bytes = 0
             self._underrun_frames = 0
+            self._rebuffer_count = 0
             self._started_playback_at = None
             self._idle_event.set()
 

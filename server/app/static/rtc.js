@@ -2,6 +2,10 @@ import { handleBridgeEvent } from "./events.js";
 
 const CONNECTION_RECOVERY_MS = 5000;
 const MAX_RECONNECT_ATTEMPTS = 0;
+const NETWORK_STATS_INTERVAL_MS = 2000;
+const NETWORK_LOSS_WINDOW_MS = 12000;
+const NETWORK_MIN_PACKET_SAMPLE = 50;
+const QUALITY_RANK = { unknown: -1, excellent: 0, good: 1, fair: 2, poor: 3, offline: 4 };
 
 export function createCallController({
   auth,
@@ -20,15 +24,29 @@ export function createCallController({
     callStartedAt: 0,
     statusTimer: null,
     recoveryTimer: null,
+    networkStatsTimer: null,
+    networkStatsBusy: false,
+    networkCounters: null,
+    networkLossSamples: [],
+    smoothedNetworkMetrics: null,
+    networkQuality: "unknown",
+    pendingNetworkQuality: "unknown",
+    pendingNetworkSamples: 0,
+    requestedPrebufferSeconds: null,
+    appliedPrebufferSeconds: null,
+    adaptiveBuffer: defaultAdaptiveBufferConfig(),
     reconnectAttempts: 0,
+    isReconnecting: false,
     isCalling: false,
     isSpeaking: false,
     isMuted: false,
     connectionTonePlayed: false,
     audioContext: null,
     meter: null,
+    currentTurnId: null,
     currentTranscript: "",
     currentAnswer: "",
+    turnAnswers: new Map(),
   };
 
   if (navigator.mediaDevices?.addEventListener) {
@@ -51,9 +69,13 @@ export function createCallController({
       }
       const rtcConfig = await auth.fetchRtcConfig();
       const debugMode = Boolean(isDebugMode?.());
+      state.adaptiveBuffer = normalizeAdaptiveBufferConfig(rtcConfig.audio);
+      state.appliedPrebufferSeconds = state.adaptiveBuffer.initial;
       logger?.info("rtc config loaded", {
         iceServers: rtcConfig.ice_servers?.length || 0,
         debugMode,
+        adaptiveBuffer: state.adaptiveBuffer.enabled,
+        prebufferSeconds: state.adaptiveBuffer.initial,
       });
 
       state.peerConnection = new RTCPeerConnection({ iceServers: rtcConfig.ice_servers || [] });
@@ -63,7 +85,8 @@ export function createCallController({
       state.eventsChannel.onopen = () => {
         logger?.info("events channel open");
         sendMicrophoneState();
-        ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+        sendAdaptiveBuffer();
+        ui.setStatus(state.isMuted ? "Mic off" : "Listening");
       };
       state.eventsChannel.onmessage = (event) => handleBridgeEvent(event.data, { state, ui, logger });
       state.eventsChannel.onerror = (event) => {
@@ -120,7 +143,8 @@ export function createCallController({
       setCallingState(true);
       state.callStartedAt = Date.now();
       state.statusTimer = window.setInterval(updateCallDuration, 1000);
-      ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+      startNetworkMonitor();
+      ui.setStatus(state.isMuted ? "Mic off" : "Listening");
     } catch (error) {
       logger?.error("call start failed", errorDetails(error));
       ui.recordButton.disabled = false;
@@ -176,6 +200,7 @@ export function createCallController({
     logger?.info("call end", { statusText });
     clearRecoveryTimer();
     clearStatusTimer();
+    stopNetworkMonitor();
     setCallingState(false);
     state.isSpeaking = false;
     state.isMuted = false;
@@ -217,15 +242,18 @@ export function createCallController({
         state.connectionTonePlayed = true;
         playTone("connected");
       }
-      ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+      ui.setStatus(state.isMuted ? "Mic off" : "Listening");
+      startNetworkMonitor();
       return;
     }
     if (pcState === "disconnected") {
+      ui.setNetworkQuality("offline", "WebRTC connection disconnected");
       playTone("disconnected");
       scheduleRecovery();
       return;
     }
     if (pcState === "failed") {
+      ui.setNetworkQuality("offline", "WebRTC connection failed");
       playTone("disconnected");
       scheduleRecovery(0);
     }
@@ -261,7 +289,7 @@ export function createCallController({
 
   function toggleMicrophone() {
     setMicrophoneMuted(!state.isMuted);
-    ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+    ui.setStatus(state.isMuted ? "Mic off" : "Listening");
   }
 
   function setMicrophoneMuted(nextIsMuted) {
@@ -284,7 +312,7 @@ export function createCallController({
       return;
     }
     if (state.isMuted) {
-      ui.setStatus("Microphone off");
+      ui.setStatus("Mic off");
       return;
     }
     const elapsedSeconds = Math.floor((Date.now() - state.callStartedAt) / 1000);
@@ -296,6 +324,139 @@ export function createCallController({
       window.clearInterval(state.statusTimer);
       state.statusTimer = null;
     }
+  }
+
+  function startNetworkMonitor() {
+    if (state.networkStatsTimer || !state.peerConnection) {
+      return;
+    }
+    if (state.networkQuality === "unknown") {
+      ui.setNetworkQuality("checking", "Waiting for WebRTC network statistics");
+    }
+    sampleNetworkStats();
+    state.networkStatsTimer = window.setInterval(sampleNetworkStats, NETWORK_STATS_INTERVAL_MS);
+  }
+
+  function stopNetworkMonitor() {
+    if (state.networkStatsTimer) {
+      window.clearInterval(state.networkStatsTimer);
+      state.networkStatsTimer = null;
+    }
+    state.networkStatsBusy = false;
+    state.networkCounters = null;
+    state.networkLossSamples = [];
+    state.smoothedNetworkMetrics = null;
+    state.networkQuality = "unknown";
+    state.pendingNetworkQuality = "unknown";
+    state.pendingNetworkSamples = 0;
+    state.requestedPrebufferSeconds = null;
+    state.appliedPrebufferSeconds = null;
+    ui.setNetworkQuality("unknown");
+  }
+
+  async function sampleNetworkStats() {
+    const pc = state.peerConnection;
+    if (
+      state.networkStatsBusy
+      || !pc
+      || !state.isCalling
+      || document.hidden
+      || !["connected", "connecting"].includes(pc.connectionState)
+    ) {
+      return;
+    }
+    state.networkStatsBusy = true;
+    try {
+      const report = await pc.getStats();
+      const sample = extractNetworkMetrics(report, state.networkCounters);
+      state.networkCounters = sample.counters;
+      sample.metrics.lossPct = updatePacketLossWindow(
+        state.networkLossSamples,
+        sample.packetSample,
+      );
+      if (!hasNetworkMetrics(sample.metrics)) {
+        return;
+      }
+      state.smoothedNetworkMetrics = smoothNetworkMetrics(
+        state.smoothedNetworkMetrics,
+        sample.metrics,
+      );
+      considerNetworkQuality(
+        classifyNetworkQuality(state.smoothedNetworkMetrics),
+        state.smoothedNetworkMetrics,
+      );
+    } catch (error) {
+      logger?.warn("network stats collection failed", errorDetails(error));
+    } finally {
+      state.networkStatsBusy = false;
+    }
+  }
+
+  function considerNetworkQuality(nextQuality, metrics) {
+    if (nextQuality === "unknown") {
+      return;
+    }
+    const currentQuality = state.networkQuality;
+    const isWorse = QUALITY_RANK[nextQuality] > QUALITY_RANK[currentQuality];
+    const requiredSamples = isWorse && nextQuality === "poor" ? 2 : isWorse ? 1 : 3;
+    if (requiredSamples === 1) {
+      applyNetworkQuality(nextQuality, metrics);
+      return;
+    }
+    if (nextQuality === currentQuality) {
+      state.pendingNetworkQuality = "unknown";
+      state.pendingNetworkSamples = 0;
+      ui.setNetworkQuality(currentQuality, formatNetworkDetails(metrics, state));
+      return;
+    }
+    if (state.pendingNetworkQuality !== nextQuality) {
+      state.pendingNetworkQuality = nextQuality;
+      state.pendingNetworkSamples = 1;
+    } else {
+      state.pendingNetworkSamples += 1;
+    }
+    if (state.pendingNetworkSamples >= requiredSamples) {
+      applyNetworkQuality(nextQuality, metrics);
+    } else {
+      ui.setNetworkQuality(currentQuality, formatNetworkDetails(metrics, state));
+    }
+  }
+
+  function applyNetworkQuality(quality, metrics) {
+    state.networkQuality = quality;
+    state.pendingNetworkQuality = "unknown";
+    state.pendingNetworkSamples = 0;
+    const targetSeconds = selectPrebufferSeconds(quality, state.adaptiveBuffer);
+    state.requestedPrebufferSeconds = targetSeconds;
+    const details = formatNetworkDetails(metrics, state);
+    ui.setNetworkQuality(quality, details);
+    logger?.info("network quality changed", {
+      quality,
+      rttMs: roundedMetric(metrics.rttMs),
+      jitterMs: roundedMetric(metrics.jitterMs),
+      lossPct: roundedMetric(metrics.lossPct),
+      jitterBufferMs: roundedMetric(metrics.jitterBufferMs),
+      route: metrics.route,
+      targetPrebufferSeconds: targetSeconds,
+    });
+    sendAdaptiveBuffer();
+  }
+
+  function sendAdaptiveBuffer() {
+    if (
+      !state.adaptiveBuffer.enabled
+      || state.requestedPrebufferSeconds === null
+      || state.eventsChannel?.readyState !== "open"
+    ) {
+      return;
+    }
+    state.eventsChannel.send(
+      JSON.stringify({
+        type: "network_quality",
+        quality: state.networkQuality,
+        prebuffer_seconds: state.requestedPrebufferSeconds,
+      }),
+    );
   }
 
   function clearRecoveryTimer() {
@@ -311,8 +472,10 @@ export function createCallController({
   }
 
   function resetConversationState() {
+    state.currentTurnId = null;
     state.currentTranscript = "";
     state.currentAnswer = "";
+    state.turnAnswers.clear();
     ui.resetConversation();
   }
 
@@ -322,11 +485,28 @@ export function createCallController({
     },
     endCall,
     startCall,
+    reconnect,
     toggleMicrophone,
     listAudioInputs,
     switchAudioInput,
     sendDebugText,
   };
+
+  async function reconnect() {
+    if (!state.isCalling || state.isReconnecting) {
+      return false;
+    }
+    state.isReconnecting = true;
+    logger?.info("manual reconnect start");
+    try {
+      await endCall("Reconnecting");
+      await startCall({ preserveConversation: true });
+      logger?.info("manual reconnect complete", { connected: state.isCalling });
+      return state.isCalling;
+    } finally {
+      state.isReconnecting = false;
+    }
+  }
 
   async function listAudioInputs({ requestPermission = false } = {}) {
     if (!navigator.mediaDevices?.enumerateDevices) {
@@ -413,7 +593,7 @@ export function createCallController({
       return true;
     } catch (error) {
       nextStream?.getTracks().forEach((track) => track.stop());
-      ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+      ui.setStatus(state.isMuted ? "Mic off" : "Listening");
       ui.setDebug(error.message || "Unable to switch microphone.");
       logger?.error("audio input switch failed", errorDetails(error));
       return false;
@@ -578,6 +758,229 @@ function audioConstraints(deviceId = "") {
     channelCount: 1,
     ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
   };
+}
+
+export function extractNetworkMetrics(report, previousCounters = null) {
+  const values = [];
+  report?.forEach?.((value) => values.push(value));
+  const inbound = values.find(
+    (stat) => stat.type === "inbound-rtp" && !stat.isRemote && (stat.kind === "audio" || stat.mediaType === "audio"),
+  );
+  const remoteInbound = values.find(
+    (stat) => stat.type === "remote-inbound-rtp" && (stat.kind === "audio" || stat.mediaType === "audio"),
+  );
+  const transport = values.find((stat) => stat.type === "transport" && stat.selectedCandidatePairId);
+  const candidatePair = (transport && report.get?.(transport.selectedCandidatePairId))
+    || values.find(
+      (stat) => stat.type === "candidate-pair" && stat.state === "succeeded" && (stat.selected || stat.nominated),
+    );
+  const localCandidate = candidatePair?.localCandidateId
+    ? report.get?.(candidatePair.localCandidateId)
+    : null;
+  const remoteCandidate = candidatePair?.remoteCandidateId
+    ? report.get?.(candidatePair.remoteCandidateId)
+    : null;
+
+  const counters = {
+    packetsReceived: finiteNumber(inbound?.packetsReceived, 0),
+    packetsLost: finiteNumber(inbound?.packetsLost, 0),
+    jitterBufferDelay: finiteNumber(inbound?.jitterBufferDelay, 0),
+    jitterBufferEmittedCount: finiteNumber(inbound?.jitterBufferEmittedCount, 0),
+  };
+  const hasPrevious = previousCounters !== null;
+  const previous = previousCounters || counters;
+  const receivedDelta = hasPrevious
+    ? nonNegativeDelta(counters.packetsReceived, previous.packetsReceived)
+    : 0;
+  const lostDelta = hasPrevious
+    ? nonNegativeDelta(counters.packetsLost, previous.packetsLost)
+    : 0;
+  const emittedDelta = nonNegativeDelta(
+    counters.jitterBufferEmittedCount,
+    previousCounters?.jitterBufferEmittedCount || 0,
+  );
+  const jitterBufferDelayDelta = nonNegativeDelta(
+    counters.jitterBufferDelay,
+    previousCounters?.jitterBufferDelay || 0,
+  );
+  const route = [localCandidate?.candidateType, remoteCandidate?.candidateType].includes("relay")
+    ? "turn"
+    : candidatePair
+      ? "direct"
+      : "unknown";
+
+  return {
+    counters,
+    packetSample: {
+      received: receivedDelta,
+      lost: lostDelta,
+    },
+    metrics: {
+      rttMs: secondsToMs(candidatePair?.currentRoundTripTime ?? remoteInbound?.roundTripTime),
+      jitterMs: secondsToMs(inbound?.jitter),
+      lossPct: null,
+      jitterBufferMs: emittedDelta > 0 ? (jitterBufferDelayDelta / emittedDelta) * 1000 : null,
+      route,
+    },
+  };
+}
+
+export function classifyNetworkQuality(metrics) {
+  const measured = [metrics?.rttMs, metrics?.jitterMs, metrics?.lossPct]
+    .filter((value) => Number.isFinite(value));
+  if (!measured.length) {
+    return "unknown";
+  }
+  const rttMs = finiteNumber(metrics.rttMs, 0);
+  const jitterMs = finiteNumber(metrics.jitterMs, 0);
+  const lossPct = finiteNumber(metrics.lossPct, 0);
+  if (lossPct >= 10 || jitterMs >= 80 || rttMs >= 600) {
+    return "poor";
+  }
+  if (lossPct >= 4 || jitterMs >= 30 || rttMs >= 250) {
+    return "fair";
+  }
+  if (lossPct >= 1 || jitterMs >= 15 || rttMs >= 120) {
+    return "good";
+  }
+  return "excellent";
+}
+
+export function updatePacketLossWindow(
+  samples,
+  packetSample,
+  now = Date.now(),
+  windowMs = NETWORK_LOSS_WINDOW_MS,
+) {
+  const received = Math.max(0, finiteNumber(packetSample?.received, 0));
+  const lost = Math.max(0, finiteNumber(packetSample?.lost, 0));
+  if (received + lost > 0) {
+    samples.push({ at: now, received, lost });
+  }
+  while (samples.length && now - samples[0].at > windowMs) {
+    samples.shift();
+  }
+  const totals = samples.reduce(
+    (result, sample) => ({
+      received: result.received + sample.received,
+      lost: result.lost + sample.lost,
+    }),
+    { received: 0, lost: 0 },
+  );
+  const packetCount = totals.received + totals.lost;
+  if (packetCount < NETWORK_MIN_PACKET_SAMPLE) {
+    return null;
+  }
+  return (totals.lost / packetCount) * 100;
+}
+
+export function selectPrebufferSeconds(quality, config = defaultAdaptiveBufferConfig()) {
+  const normalized = normalizeAdaptiveBufferConfig(config);
+  let target = normalized.initial;
+  if (quality === "excellent") {
+    target = normalized.min;
+  } else if (quality === "fair") {
+    target = normalized.initial + ((normalized.max - normalized.initial) * 0.5);
+  } else if (quality === "poor") {
+    target = normalized.max;
+  }
+  return Number(Math.min(normalized.max, Math.max(normalized.min, target)).toFixed(2));
+}
+
+function defaultAdaptiveBufferConfig() {
+  return { enabled: true, initial: 0.6, min: 0.5, max: 1.2 };
+}
+
+function normalizeAdaptiveBufferConfig(config = {}) {
+  const defaults = defaultAdaptiveBufferConfig();
+  const minValue = finiteNumber(config.prebuffer_min_seconds ?? config.min, defaults.min);
+  const min = Math.min(2, Math.max(0.1, minValue));
+  const maxValue = Math.min(
+    2,
+    Math.max(0.1, finiteNumber(config.prebuffer_max_seconds ?? config.max, defaults.max)),
+  );
+  const max = Math.max(min, maxValue);
+  const initialValue = finiteNumber(config.prebuffer_seconds ?? config.initial, defaults.initial);
+  return {
+    enabled: config.adaptive_buffer_enabled ?? config.enabled ?? defaults.enabled,
+    min,
+    max,
+    initial: Math.min(max, Math.max(min, initialValue)),
+  };
+}
+
+function smoothNetworkMetrics(previous, current) {
+  if (!previous) {
+    return current;
+  }
+  const alpha = 0.35;
+  return {
+    rttMs: smoothMetric(previous.rttMs, current.rttMs, alpha),
+    jitterMs: smoothMetric(previous.jitterMs, current.jitterMs, alpha),
+    // Packet loss is already aggregated over a rolling window.
+    lossPct: Number.isFinite(current.lossPct) ? current.lossPct : previous.lossPct,
+    jitterBufferMs: smoothMetric(previous.jitterBufferMs, current.jitterBufferMs, alpha),
+    route: current.route === "unknown" ? previous.route : current.route,
+  };
+}
+
+function smoothMetric(previous, current, alpha) {
+  if (!Number.isFinite(current)) {
+    return previous;
+  }
+  if (!Number.isFinite(previous)) {
+    return current;
+  }
+  return (current * alpha) + (previous * (1 - alpha));
+}
+
+function hasNetworkMetrics(metrics) {
+  return [metrics.rttMs, metrics.jitterMs, metrics.lossPct].some((value) => Number.isFinite(value));
+}
+
+function formatNetworkDetails(metrics, state) {
+  const parts = [];
+  if (Number.isFinite(metrics.rttMs)) {
+    parts.push(`RTT ${Math.round(metrics.rttMs)} ms`);
+  }
+  if (Number.isFinite(metrics.jitterMs)) {
+    parts.push(`jitter ${Math.round(metrics.jitterMs)} ms`);
+  }
+  if (Number.isFinite(metrics.lossPct)) {
+    parts.push(`loss ${metrics.lossPct.toFixed(1)}%`);
+  }
+  if (Number.isFinite(metrics.jitterBufferMs)) {
+    parts.push(`playout ${Math.round(metrics.jitterBufferMs)} ms`);
+  }
+  if (metrics.route && metrics.route !== "unknown") {
+    parts.push(metrics.route === "turn" ? "TURN relay" : "direct path");
+  }
+  const bufferSeconds = state.appliedPrebufferSeconds
+    ?? state.requestedPrebufferSeconds
+    ?? state.adaptiveBuffer.initial;
+  parts.push(`source buffer ${Number(bufferSeconds).toFixed(2)} s`);
+  return parts.join(" · ");
+}
+
+function finiteNumber(value, fallback) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function nonNegativeDelta(current, previous) {
+  return Math.max(0, finiteNumber(current, 0) - finiteNumber(previous, 0));
+}
+
+function secondsToMs(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? seconds * 1000 : null;
+}
+
+function roundedMetric(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(1)) : null;
 }
 
 function startVoiceMeter(stream, ui) {

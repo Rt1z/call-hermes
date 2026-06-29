@@ -78,6 +78,12 @@ ui.settingsButton.addEventListener("click", () => {
   openSettings();
 });
 
+ui.reconnectButton.addEventListener("click", async () => {
+  clientLogger.info("reconnect button tapped", { calling: call.isCalling });
+  ui.reconnectButton.disabled = true;
+  await call.reconnect();
+});
+
 ui.deviceStatusEl.addEventListener("click", async () => {
   await openAudioDevicePicker();
 });
@@ -283,7 +289,7 @@ async function openAudioDevicePicker() {
   } catch (error) {
     ui.setStatus("Mic error");
     ui.setDebug(error.message || "Unable to list microphones.");
-    ui.audioDeviceHelp.textContent = "Unable to load microphones. Open Debug information below for details.";
+    ui.audioDeviceHelp.textContent = "Unable to load microphones. Open Settings to view Debug information.";
     clientLogger.error("audio device picker failed", errorDetails(error));
   } finally {
     ui.deviceStatusEl.disabled = false;
@@ -440,8 +446,10 @@ function createFallbackController({ auth, ui, logger = null }) {
       ui.setStatus("Thinking");
       logger?.info("fallback turn upload start", { bytes: blob.size, mimeType: blob.type });
       const result = await auth.sendPwaTurn(blob);
-      ui.setTranscript(result.transcript || "-");
-      ui.setAnswer(result.answer || "-");
+      const turnId = result.turn_id || `fallback-${Date.now()}`;
+      ui.setTurnUser(turnId, result.transcript || "-");
+      ui.setTurnAnswer(turnId, result.answer || "-");
+      ui.setTurnComplete(turnId);
       await playFallbackAudio(result);
       ui.setStatus("Fallback ready");
       ui.setDebug(`Fallback turn ${result.turn_id || ""}`.trim());

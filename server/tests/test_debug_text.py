@@ -40,6 +40,51 @@ async def test_microphone_muted_message_updates_session_state() -> None:
     assert events[-1] == ("microphone", {"muted": False})
 
 
+async def test_network_quality_message_updates_prebuffer() -> None:
+    settings = Settings(
+        app_shared_secret="x" * 32,
+        jwt_secret="y" * 32,
+        webrtc_audio_prebuffer_min_seconds=0.3,
+        webrtc_audio_prebuffer_max_seconds=1.0,
+    )
+    session = VoiceBridgeSession("test-session", settings)
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def emit(event_type: str, **payload: object) -> None:
+        events.append((event_type, payload))
+
+    session.events.emit = emit  # type: ignore[method-assign]
+    await session._handle_client_message(
+        json.dumps(
+            {
+                "type": "network_quality",
+                "quality": "poor",
+                "prebuffer_seconds": 2.0,
+            }
+        )
+    )
+    await session.close()
+
+    assert session.output_track.prebuffer_seconds == 1.0
+    assert events[-1] == (
+        "network_buffer",
+        {"quality": "poor", "prebuffer_seconds": 1.0},
+    )
+
+
+async def test_network_quality_message_ignores_invalid_buffer() -> None:
+    settings = Settings(app_shared_secret="x" * 32, jwt_secret="y" * 32)
+    session = VoiceBridgeSession("test-session", settings)
+    initial_seconds = session.output_track.prebuffer_seconds
+
+    await session._handle_client_message(
+        json.dumps({"type": "network_quality", "prebuffer_seconds": "not-a-number"})
+    )
+    await session.close()
+
+    assert session.output_track.prebuffer_seconds == initial_seconds
+
+
 def test_normalized_pcm16_rms() -> None:
     assert _normalized_pcm16_rms(b"") == 0
     silence = (0).to_bytes(2, "little", signed=True) * 10

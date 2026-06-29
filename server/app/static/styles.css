@@ -42,12 +42,14 @@ textarea {
   height: 100svh;
   padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
 }
 
 .call-surface {
   width: min(100%, 520px);
   height: 100%;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 18px;
@@ -63,7 +65,7 @@ textarea {
 .topbar-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
 }
 
 h1,
@@ -86,6 +88,78 @@ h1 {
   color: var(--muted);
   font-size: 15px;
   line-height: 1.2;
+}
+
+.network-quality {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 3px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.network-quality[hidden] {
+  display: none;
+}
+
+.network-bars {
+  width: 17px;
+  height: 14px;
+  display: inline-flex;
+  align-items: end;
+  gap: 2px;
+}
+
+.network-bars i {
+  width: 3px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.2;
+}
+
+.network-bars i:nth-child(1) {
+  height: 4px;
+}
+
+.network-bars i:nth-child(2) {
+  height: 7px;
+}
+
+.network-bars i:nth-child(3) {
+  height: 10px;
+}
+
+.network-bars i:nth-child(4) {
+  height: 13px;
+}
+
+.network-quality[data-quality="excellent"],
+.network-quality[data-quality="good"] {
+  color: var(--green);
+}
+
+.network-quality[data-quality="fair"] {
+  color: var(--amber);
+}
+
+.network-quality[data-quality="poor"],
+.network-quality[data-quality="offline"] {
+  color: var(--red);
+}
+
+.network-quality[data-quality="poor"] .network-bars i:nth-child(n + 2),
+.network-quality[data-quality="offline"] .network-bars i {
+  opacity: 0.2;
+}
+
+.network-quality[data-quality="poor"] .network-bars i:first-child,
+.network-quality[data-quality="fair"] .network-bars i:nth-child(-n + 3),
+.network-quality[data-quality="good"] .network-bars i,
+.network-quality[data-quality="excellent"] .network-bars i {
+  opacity: 0.9;
 }
 
 .status-dot {
@@ -127,6 +201,27 @@ body[data-status="error"] .status-dot {
   display: grid;
   place-items: center;
   box-shadow: 0 8px 22px rgb(0 0 0 / 18%);
+}
+
+.icon-button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.32;
+}
+
+.reconnect-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .device-pill {
@@ -219,14 +314,14 @@ body[data-status="error"] .status-dot {
   gap: 8px;
 }
 
-.device-debug {
+.debug-details {
   border-top: 1px solid var(--line);
   padding-top: 14px;
   color: var(--muted);
   font-size: 13px;
 }
 
-.device-debug summary {
+.debug-details summary {
   min-height: 32px;
   display: flex;
   align-items: center;
@@ -254,10 +349,10 @@ body[data-status="error"] .status-dot {
 }
 
 .device-option-icon {
-  width: 16px;
-  height: 22px;
+  width: 12px;
+  height: 12px;
   border: 2px solid currentColor;
-  border-radius: 8px;
+  border-radius: 50%;
   color: var(--muted);
 }
 
@@ -328,12 +423,17 @@ body[data-status="error"] .status-dot {
 .transcript {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 18px;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: 4px;
+  padding: 0 7px 4px;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+}
+
+.conversation-turn {
+  display: grid;
+  gap: 10px;
 }
 
 .calling .transcript {
@@ -345,31 +445,70 @@ body[data-status="error"] .status-dot {
 }
 
 .transcript-panel {
-  min-height: 116px;
+  --bubble-bg: var(--panel);
+  --bubble-border: var(--line);
+
+  position: relative;
+  width: min(94%, 620px);
+  min-height: 0;
   padding: 15px 16px 16px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--bubble-border);
   border-radius: 8px;
-  background: var(--panel);
+  background: var(--bubble-bg);
   box-shadow: 0 10px 26px rgb(0 0 0 / 16%);
+  overflow: visible;
+}
+
+.transcript-panel::after {
+  content: "";
+  position: absolute;
+  top: 18px;
+  width: 10px;
+  height: 10px;
+  background: var(--bubble-bg);
+  transform: rotate(45deg);
+}
+
+.user-panel {
+  width: min(88%, 560px);
+  justify-self: end;
+}
+
+.user-panel::after {
+  right: -6px;
+  border-top: 1px solid var(--bubble-border);
+  border-right: 1px solid var(--bubble-border);
 }
 
 .assistant-panel {
-  min-height: 164px;
-  background: var(--panel-3);
+  --bubble-bg: var(--panel-3);
+
+  justify-self: start;
 }
 
-.label {
-  display: block;
-  margin-bottom: 10px;
-  color: var(--muted);
-  font-size: 13px;
-  text-transform: uppercase;
+.assistant-panel::after {
+  left: -6px;
+  border-bottom: 1px solid var(--bubble-border);
+  border-left: 1px solid var(--bubble-border);
+}
+
+.conversation-turn.partial .user-panel {
+  opacity: 0.72;
+}
+
+.conversation-turn.streaming .assistant-panel {
+  --bubble-border: rgb(75 147 209 / 58%);
+}
+
+.conversation-turn.interrupted .assistant-panel {
+  --bubble-border: rgb(213 164 73 / 52%);
 }
 
 .transcript p {
   line-height: 1.55;
   overflow-wrap: anywhere;
   font-size: 16px;
+  white-space: pre-wrap;
 }
 
 .debug-text {
@@ -766,6 +905,190 @@ dialog::backdrop {
 #saveSettingsButton {
   border-color: transparent;
   background: var(--blue);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .icon-button:hover,
+  .device-pill:hover,
+  .device-option:hover,
+  .settings button:hover,
+  .debug-composer button:hover {
+    border-color: #526166;
+    background-color: #263035;
+  }
+
+  .record-button:hover:not(:disabled) {
+    box-shadow: 0 22px 52px rgb(32 166 106 / 24%);
+    transform: translateY(-2px);
+  }
+
+  .mic-button:hover:not(:disabled) {
+    border-color: #526166;
+    background: var(--panel-2);
+  }
+}
+
+@media (min-width: 900px) {
+  html,
+  body {
+    height: 100%;
+  }
+
+  .shell {
+    height: 100%;
+    min-height: 620px;
+    padding: 30px 40px;
+  }
+
+  .call-surface {
+    width: min(100%, 680px);
+    max-height: 860px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    gap: 18px;
+  }
+
+  .topbar {
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  h1 {
+    font-size: 34px;
+  }
+
+  .topbar-actions {
+    gap: 2px;
+  }
+
+  .device-pill,
+  .icon-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .meter {
+    width: 100%;
+    height: 72px;
+    min-height: 72px;
+    padding: 0;
+    border: 0;
+  }
+
+  .meter span {
+    width: 9px;
+    height: 28px;
+  }
+
+  .transcript {
+    grid-template-rows: none;
+    align-content: start;
+    gap: 16px;
+    padding: 0 7px;
+    scrollbar-color: var(--line) transparent;
+    scrollbar-width: thin;
+  }
+
+  .calling .transcript,
+  .debug-mode .transcript {
+    padding-bottom: 0;
+  }
+
+  .transcript-panel {
+    min-height: 0;
+    padding: 20px 22px;
+    overflow: visible;
+  }
+
+  .assistant-panel {
+    min-height: 0;
+  }
+
+  .transcript p {
+    max-width: 76ch;
+    font-size: 17px;
+    line-height: 1.62;
+  }
+
+  .call-controls,
+  .calling .call-controls,
+  .fallback-mode .call-controls {
+    position: static;
+    align-self: center;
+    justify-self: center;
+    width: min(100%, 320px);
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    transform: none;
+  }
+
+  .calling .call-controls,
+  .fallback-mode .call-controls {
+    display: grid;
+    place-items: center;
+  }
+
+  .debug-mode .call-controls {
+    display: none;
+  }
+
+  .calling .call-controls::before,
+  .fallback-mode .call-controls::before {
+    display: none;
+  }
+
+  .record-button {
+    width: 124px;
+    height: 124px;
+  }
+
+  .mic-button {
+    width: 92px;
+    height: 92px;
+  }
+
+  .debug-mode .debug-composer {
+    position: static;
+    align-self: center;
+    justify-self: stretch;
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgb(255 255 255 / 5%);
+    border-radius: 8px;
+    background: rgb(15 18 20 / 86%);
+    box-shadow: 0 18px 54px rgb(0 0 0 / 28%);
+    backdrop-filter: blur(12px);
+    transform: none;
+  }
+
+  .debug-mode .debug-composer textarea {
+    grid-column: auto;
+    min-height: 72px;
+    max-height: 160px;
+  }
+
+  dialog {
+    width: min(calc(100vw - 64px), 520px);
+    max-width: 520px;
+  }
+
+  .settings {
+    padding: 24px;
+  }
 }
 
 @media (max-width: 380px) {

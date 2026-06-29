@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
+import math
 import time
+from uuid import uuid4
 from array import array
 from collections import deque
 from collections.abc import AsyncIterator
@@ -21,13 +23,20 @@ logger = logging.getLogger("call_hermes.bridge")
 
 
 class VoiceBridgeSession:
-    def __init__(self, session_id: str, settings: Settings) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        settings: Settings,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> None:
         self.session_id = session_id
         self.settings = settings
         self.pc = RTCPeerConnection(configuration=_rtc_configuration(settings))
         self.events = EventSink()
         self.output_track = QueueAudioTrack(
             prebuffer_seconds=settings.webrtc_audio_prebuffer_seconds,
+            min_prebuffer_seconds=settings.webrtc_audio_prebuffer_min_seconds,
+            max_prebuffer_seconds=settings.webrtc_audio_prebuffer_max_seconds,
             logger=logger,
             session_id=session_id,
         )
@@ -36,9 +45,14 @@ class VoiceBridgeSession:
         self._is_speaking = asyncio.Event()
         self._turn_trace: TurnTrace | None = None
         self._respond_task: asyncio.Task[None] | None = None
+        self._respond_turn_id: str | None = None
+        self._active_input_turn_id: str | None = None
+        self._conversation_history = [dict(message) for message in conversation_history or []]
+        self._trim_conversation_history()
         self._last_interrupt_at = 0.0
         self._assistant_echo_text = ""
         self._client_muted = False
+        self._barge_in_confirmed = False
 
         @self.pc.on("datachannel")
         def on_datachannel(channel) -> None:  # type: ignore[no-untyped-def]
@@ -77,12 +91,15 @@ class VoiceBridgeSession:
         await self.output_track.close_queue()
         await self.pc.close()
 
+    @property
+    def conversation_history(self) -> list[dict[str, str]]:
+        return [dict(message) for message in self._conversation_history]
+
     def _interrupt_response(self) -> None:
         task = self._respond_task
         if task is not None and not task.done():
             task.cancel()
         self.output_track.clear()
-        self.events.emit("speaking", state="interrupted")
 
     async def _handle_client_message(self, message: object) -> None:
         if not isinstance(message, str):
@@ -97,20 +114,51 @@ class VoiceBridgeSession:
             logger.info("session_id=%s microphone_muted=%s", self.session_id, self._client_muted)
             self.events.emit("microphone", muted=self._client_muted)
             return
+        if message_type == "network_quality":
+            await self._handle_network_quality(payload)
+            return
         if message_type == "debug_text":
             text = str(payload.get("text") or "").strip()
             if not text:
                 return
             await self.submit_text(text[:4000])
 
+    async def _handle_network_quality(self, payload: dict[str, object]) -> None:
+        if not self.settings.webrtc_adaptive_buffer_enabled:
+            return
+        try:
+            requested_seconds = float(payload.get("prebuffer_seconds", ""))
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(requested_seconds):
+            return
+        quality = str(payload.get("quality") or "unknown")
+        if quality not in {"excellent", "good", "fair", "poor"}:
+            quality = "unknown"
+        actual_seconds = self.output_track.set_prebuffer_seconds(requested_seconds)
+        logger.info(
+            "session_id=%s network quality=%s prebuffer_requested=%.2f prebuffer_actual=%.2f",
+            self.session_id,
+            quality,
+            requested_seconds,
+            actual_seconds,
+        )
+        self.events.emit(
+            "network_buffer",
+            quality=quality,
+            prebuffer_seconds=actual_seconds,
+        )
+
     async def submit_text(self, text: str) -> None:
         if self._is_speaking.is_set():
             self._interrupt_response()
-        trace = TurnTrace(turn_id=self.session_id[:12], logger=logger)
+        turn_id = uuid4().hex
+        trace = TurnTrace(turn_id=turn_id, logger=logger)
         trace.mark("asr_final")
-        self.events.emit("final_transcript", text=text)
-        task = asyncio.create_task(self._respond(text, trace))
+        self.events.emit("final_transcript", text=text, turn_id=turn_id)
+        task = asyncio.create_task(self._respond(text, trace, turn_id))
         self._respond_task = task
+        self._respond_turn_id = turn_id
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -123,34 +171,41 @@ class VoiceBridgeSession:
         vad_active = not auto_vad_enabled
         speech_started_at: float | None = None
         last_voice_at = time.monotonic()
-        vad_preroll: deque[bytes] = deque(maxlen=12)
+        vad_preroll: deque[bytes] = deque()
+        vad_preroll_bytes = 0
+        vad_preroll_max_bytes = 16000 * 2 * self.settings.auto_vad_preroll_ms // 1000
 
         def on_transcript(transcript: Transcript) -> None:
             text = transcript.text.strip()
+            if not self._accept_input_while_speaking(text):
+                if transcript.is_final:
+                    logger.info(
+                        "session_id=%s ignored unconfirmed barge-in final text=%r",
+                        self.session_id,
+                        text[:40],
+                    )
+                return
+            if self._active_input_turn_id is None:
+                self._active_input_turn_id = uuid4().hex
+            turn_id = self._active_input_turn_id
             if self._turn_trace is None:
-                self._turn_trace = TurnTrace(turn_id=self.session_id[:12], logger=logger)
+                self._turn_trace = TurnTrace(turn_id=turn_id, logger=logger)
                 self._turn_trace.mark("asr_first_partial")
-            if self._should_interrupt(text):
-                logger.info(
-                    "session_id=%s barge-in text_len=%d text=%r",
-                    self.session_id,
-                    len(text),
-                    text[:40],
-                )
-                self._interrupt_response()
             self.events.emit(
                 "final_transcript" if transcript.is_final else "partial_transcript",
                 text=transcript.text,
+                turn_id=turn_id,
             )
             if transcript.is_final:
+                self._barge_in_confirmed = False
+                self._active_input_turn_id = None
                 if self._turn_trace is not None:
                     self._turn_trace.mark("asr_final")
                 trace = self._turn_trace
                 self._turn_trace = None
-                if self._is_speaking.is_set():
-                    self._interrupt_response()
-                task = asyncio.create_task(self._respond(transcript.text, trace))
+                task = asyncio.create_task(self._respond(transcript.text, trace, turn_id))
                 self._respond_task = task
+                self._respond_turn_id = turn_id
                 self._tasks.add(task)
                 task.add_done_callback(self._tasks.discard)
 
@@ -182,6 +237,9 @@ class VoiceBridgeSession:
                 frame = await track.recv()
                 if self._client_muted:
                     await stop_asr_if_needed("microphone_muted")
+                    vad_preroll.clear()
+                    vad_preroll_bytes = 0
+                    speech_started_at = None
                     if vad_active:
                         vad_active = False
                         self.events.emit("vad_state", state="muted")
@@ -193,6 +251,9 @@ class VoiceBridgeSession:
                     now = time.monotonic()
                     rms = _normalized_pcm16_rms(pcm)
                     vad_preroll.append(pcm)
+                    vad_preroll_bytes += len(pcm)
+                    while vad_preroll_bytes > vad_preroll_max_bytes and len(vad_preroll) > 1:
+                        vad_preroll_bytes -= len(vad_preroll.popleft())
                     if rms >= vad_threshold:
                         last_voice_at = now
                         if speech_started_at is None:
@@ -208,7 +269,9 @@ class VoiceBridgeSession:
                             self.events.emit("vad_state", state="speech")
                             await start_asr_if_needed()
                             while vad_preroll:
-                                await asr.send_pcm16(vad_preroll.popleft())
+                                preroll_chunk = vad_preroll.popleft()
+                                vad_preroll_bytes -= len(preroll_chunk)
+                                await asr.send_pcm16(preroll_chunk)
                             continue
                     else:
                         speech_started_at = None
@@ -253,6 +316,21 @@ class VoiceBridgeSession:
         self._last_interrupt_at = now
         return True
 
+    def _accept_input_while_speaking(self, text: str) -> bool:
+        if not self._is_speaking.is_set() or self._barge_in_confirmed:
+            return True
+        if not self._should_interrupt(text):
+            return False
+        self._barge_in_confirmed = True
+        logger.info(
+            "session_id=%s barge-in confirmed text_len=%d text=%r",
+            self.session_id,
+            len(text),
+            text[:40],
+        )
+        self._interrupt_response()
+        return True
+
     def _remember_assistant_text(self, text: str) -> None:
         self._assistant_echo_text = (self._assistant_echo_text + text)[-1200:]
 
@@ -261,25 +339,32 @@ class VoiceBridgeSession:
         spoken = _normalize_for_echo_match(self._assistant_echo_text)
         return len(heard) >= self.settings.barge_in_min_chars and heard in spoken
 
-    async def _respond(self, user_text: str, trace: TurnTrace | None) -> None:
+    async def _respond(self, user_text: str, trace: TurnTrace | None, turn_id: str) -> None:
         self._is_speaking.set()
+        self._barge_in_confirmed = False
         self._assistant_echo_text = ""
-        self.events.emit("thinking", text=user_text)
+        self.events.emit("thinking", text=user_text, turn_id=turn_id)
         hermes = HermesClient(self.settings)
         normalizer = StreamingTTSNormalizer()
         hermes_first_marked = False
         tts_first_marked = False
+        hermes_completed = False
+        assistant_text = ""
 
         async def hermes_chunks() -> AsyncIterator[str]:
-            nonlocal hermes_first_marked
+            nonlocal assistant_text, hermes_completed, hermes_first_marked
             buffer = ""
             try:
-                async for chunk in hermes.stream_chat(user_text):
+                async for chunk in hermes.stream_chat(
+                    user_text,
+                    history=self._conversation_history,
+                ):
                     if not hermes_first_marked and trace is not None:
                         trace.mark("hermes_first_token")
                         hermes_first_marked = True
                     self._remember_assistant_text(chunk)
-                    self.events.emit("answer_delta", text=chunk)
+                    assistant_text += chunk
+                    self.events.emit("answer_delta", text=chunk, turn_id=turn_id)
                     buffer += chunk
                     if _should_flush(buffer):
                         normalized = normalizer.feed(buffer) + normalizer.flush()
@@ -290,12 +375,15 @@ class VoiceBridgeSession:
                     normalized = normalizer.feed(buffer) + normalizer.flush()
                     if normalized:
                         yield normalized
+                hermes_completed = True
             except Exception as exc:  # noqa: BLE001
                 self.events.emit("error", source="hermes", message=str(exc))
-                yield "Hermes 暂时无法连接，请稍后再试。"
+                fallback_text = "Hermes 暂时无法连接，请稍后再试。"
+                self.events.emit("answer_delta", text=fallback_text, turn_id=turn_id)
+                yield fallback_text
 
         try:
-            self.events.emit("speaking", state="start")
+            self.events.emit("speaking", state="start", turn_id=turn_id)
             hermes_iter = hermes_chunks()
             try:
                 first_tts_text = await asyncio.wait_for(
@@ -304,6 +392,7 @@ class VoiceBridgeSession:
                 )
             except StopAsyncIteration:
                 first_tts_text = "Hermes 没有返回内容。"
+                self.events.emit("answer_delta", text=first_tts_text, turn_id=turn_id)
 
             async def tts_text_chunks() -> AsyncIterator[str]:
                 yield first_tts_text
@@ -321,6 +410,8 @@ class VoiceBridgeSession:
                 tts_chunks += 1
                 tts_bytes += len(pcm24k)
                 await self.output_track.push_pcm16(pcm24k, sample_rate=24000)
+            if hermes_completed and assistant_text.strip():
+                self._commit_conversation_turn(user_text, assistant_text)
             self.output_track.finish_utterance()
             logger.info(
                 "session_id=%s tts stream complete chunks=%d pcm24k_bytes=%d",
@@ -332,18 +423,19 @@ class VoiceBridgeSession:
             logger.info("session_id=%s audio playback drained", self.session_id)
             if trace is not None:
                 trace.mark("speaking_end")
-            self.events.emit("speaking", state="end")
+            self.events.emit("speaking", state="end", turn_id=turn_id)
         except asyncio.CancelledError:
             self.output_track.clear()
-            self.events.emit("speaking", state="interrupted")
+            self.events.emit("speaking", state="interrupted", turn_id=turn_id)
         except Exception as exc:  # noqa: BLE001
             self.output_track.clear()
             self.events.emit("error", source="tts", message=str(exc))
         finally:
-            self._is_speaking.clear()
-            self.events.emit("listening", session_id=self.session_id)
             if self._respond_task is asyncio.current_task():
+                self._is_speaking.clear()
+                self.events.emit("listening", session_id=self.session_id)
                 self._respond_task = None
+                self._respond_turn_id = None
             if self._turn_trace is trace:
                 self._turn_trace = None
             if trace is not None:
@@ -357,6 +449,32 @@ class VoiceBridgeSession:
                     trace.gap("asr_final", "speaking_end"),
                     trace.summary(),
                 )
+
+    def _commit_conversation_turn(self, user_text: str, assistant_text: str) -> None:
+        self._conversation_history.extend(
+            [
+                {"role": "user", "content": user_text.strip()},
+                {"role": "assistant", "content": assistant_text.strip()},
+            ]
+        )
+        self._trim_conversation_history()
+        logger.info(
+            "session_id=%s conversation committed messages=%d chars=%d",
+            self.session_id,
+            len(self._conversation_history),
+            sum(len(message["content"]) for message in self._conversation_history),
+        )
+
+    def _trim_conversation_history(self) -> None:
+        max_messages = self.settings.hermes_history_max_turns * 2
+        while len(self._conversation_history) > max_messages:
+            del self._conversation_history[:2]
+        while (
+            len(self._conversation_history) > 2
+            and sum(len(message.get("content", "")) for message in self._conversation_history)
+            > self.settings.hermes_history_max_chars
+        ):
+            del self._conversation_history[:2]
 
 
 def _should_flush(text: str) -> bool:

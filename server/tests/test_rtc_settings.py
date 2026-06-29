@@ -2,7 +2,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.config import Settings
-from app.main import OfferRequest, _settings_for_offer
+from app.main import OfferRequest, app, _settings_for_offer
+from fastapi.testclient import TestClient
 
 
 def _settings() -> Settings:
@@ -32,3 +33,30 @@ def test_offer_rejects_unknown_tts_voice() -> None:
 def test_offer_rejects_out_of_range_speech_rate() -> None:
     with pytest.raises(HTTPException):
         _settings_for_offer(_settings(), OfferRequest(sdp="v=0", tts_speech_rate=2.5))
+
+
+def test_rtc_config_exposes_adaptive_buffer_settings() -> None:
+    client = TestClient(app)
+    settings = _settings()
+    from app.main import get_settings
+
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        auth = client.post(
+            "/auth/session",
+            json={"shared_secret": "x" * 32},
+        ).json()
+        response = client.get(
+            "/rtc/config",
+            headers={"Authorization": f"Bearer {auth['token']}"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["audio"] == {
+        "adaptive_buffer_enabled": True,
+        "prebuffer_seconds": 0.6,
+        "prebuffer_min_seconds": 0.5,
+        "prebuffer_max_seconds": 1.2,
+    }

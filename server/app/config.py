@@ -98,6 +98,8 @@ class Settings(BaseSettings):
     hermes_api_key: str | None = None
     hermes_model: str = "hermes"
     hermes_timeout_seconds: float = 45
+    hermes_history_max_turns: int = Field(default=12, ge=1, le=100)
+    hermes_history_max_chars: int = Field(default=24000, ge=1000, le=200000)
     hermes_system_prompt: str | None = (
         "【输出格式强制要求（最高优先级）】\n"
         "你是一个语音助手，所有回复都将被TTS（文本转语音）系统朗读给用户听。"
@@ -131,11 +133,15 @@ class Settings(BaseSettings):
     use_mock_asr: bool = False
     use_mock_tts: bool = False
     pwa_max_upload_bytes: int = 10_000_000
-    webrtc_audio_prebuffer_seconds: float = 0.5
+    webrtc_audio_prebuffer_seconds: float = Field(default=0.6, ge=0.1, le=2.0)
+    webrtc_adaptive_buffer_enabled: bool = True
+    webrtc_audio_prebuffer_min_seconds: float = Field(default=0.5, ge=0.1, le=2.0)
+    webrtc_audio_prebuffer_max_seconds: float = Field(default=1.2, ge=0.1, le=2.0)
     auto_vad_enabled: bool = True
     auto_vad_rms_threshold: float = 0.012
     auto_vad_silence_ms: int = 1000
     auto_vad_min_speech_ms: int = 80
+    auto_vad_preroll_ms: int = Field(default=500, ge=200, le=1500)
     barge_in_min_chars: int = 3
     barge_in_cooldown_ms: int = 500
 

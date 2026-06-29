@@ -18,9 +18,22 @@
         <div class="topbar">
           <div>
             <h1>Hermes</h1>
-            <p class="status-row"><span class="status-dot" aria-hidden="true"></span><span id="status">Ready</span></p>
+            <p class="status-row">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span id="status">Ready</span>
+              <span id="networkQuality" class="network-quality" data-quality="unknown" hidden>
+                <span class="network-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+                <span class="network-quality-label">Checking</span>
+              </span>
+            </p>
           </div>
           <div class="topbar-actions">
+            <button id="reconnectButton" class="icon-button reconnect-button" type="button" aria-label="Reconnect" title="Reconnect" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M20 7v5h-5"></path>
+                <path d="M18.2 16a8 8 0 1 1 .8-8.8L20 12"></path>
+              </svg>
+            </button>
             <button id="deviceStatusText" class="device-pill" data-device="output" title="Choose microphone" type="button" aria-label="Choose microphone">
               <span class="device-symbol" aria-hidden="true">
                 <svg class="device-phone-icon" viewBox="0 0 24 24" focusable="false">
@@ -48,17 +61,8 @@
           <span></span>
         </div>
 
-        <div class="transcript">
-          <div class="transcript-panel user-panel">
-            <span class="label">You</span>
-            <p id="transcriptText">-</p>
-          </div>
-          <div class="transcript-panel assistant-panel">
-            <span class="label">Hermes</span>
-            <p id="answerText">-</p>
-            <audio id="replyAudio" preload="none" playsinline></audio>
-          </div>
-        </div>
+        <div id="conversationHistory" class="transcript" aria-live="polite"></div>
+        <audio id="replyAudio" preload="none" playsinline></audio>
 
         <form id="debugForm" class="debug-composer">
           <textarea id="debugInput" rows="3" placeholder="输入测试文本"></textarea>
@@ -105,6 +109,10 @@
           <input id="debugModeInput" type="checkbox" />
           Debug mode
         </label>
+        <details class="debug-details">
+          <summary>Debug information</summary>
+          <pre id="debugText" class="debug-text">No debug information.</pre>
+        </details>
         <menu>
           <button value="cancel" type="submit">Cancel</button>
           <button id="saveSettingsButton" value="default" type="button">Save</button>
@@ -117,10 +125,6 @@
         <h2>Microphone</h2>
         <p id="audioDeviceHelp" class="device-help">Choose the microphone used for this conversation.</p>
         <div id="audioDeviceList" class="device-list" role="listbox" aria-label="Available microphones"></div>
-        <details class="device-debug">
-          <summary>Debug information</summary>
-          <pre id="debugText" class="debug-text">No debug information.</pre>
-        </details>
         <menu>
           <button value="cancel" type="submit">Cancel</button>
         </menu>

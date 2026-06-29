@@ -12,52 +12,74 @@ export function handleBridgeEvent(raw, context) {
 
   if (event.type === "listening") {
     state.isSpeaking = false;
-    ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+    ui.setStatus(state.isMuted ? "Mic off" : "Listening");
     return;
   }
   if (event.type === "partial_transcript") {
-    ui.setTranscript(event.text || "-");
-    ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+    const turnId = resolveTurnId(event, state);
+    ui.setTurnUser(turnId, event.text || "", { partial: true });
+    ui.setStatus(state.isMuted ? "Mic off" : "Listening");
     return;
   }
   if (event.type === "final_transcript") {
+    const turnId = resolveTurnId(event, state);
     state.currentTranscript = event.text || "";
     state.currentAnswer = "";
-    ui.setTranscript(state.currentTranscript);
-    ui.setAnswer("-");
+    state.turnAnswers.set(turnId, "");
+    ui.setTurnUser(turnId, state.currentTranscript);
+    ui.setTurnThinking(turnId);
     ui.setStatus("Thinking");
     return;
   }
   if (event.type === "thinking") {
+    const turnId = resolveTurnId(event, state);
     state.currentTranscript = event.text || state.currentTranscript;
-    ui.setTranscript(state.currentTranscript);
+    ui.setTurnUser(turnId, state.currentTranscript);
+    ui.setTurnThinking(turnId);
     ui.setStatus("Thinking");
     return;
   }
   if (event.type === "answer_delta") {
-    state.currentAnswer += event.text || "";
-    ui.setAnswer(state.currentAnswer);
+    const turnId = resolveTurnId(event, state);
+    const answer = `${state.turnAnswers.get(turnId) || ""}${event.text || ""}`;
+    state.turnAnswers.set(turnId, answer);
+    state.currentAnswer = answer;
+    ui.setTurnAnswer(turnId, answer);
     return;
   }
   if (event.type === "speaking") {
+    const turnId = event.turn_id || state.currentTurnId;
     state.isSpeaking = event.state === "start";
     if (event.state === "interrupted") {
-      state.currentAnswer = "";
-      ui.setAnswer("-");
+      ui.setTurnInterrupted(turnId);
       ui.setStatus("Interrupted");
     } else {
-      ui.setStatus(state.isSpeaking ? "Speaking" : state.isMuted ? "Microphone off" : "Listening");
+      if (event.state === "end") {
+        ui.setTurnComplete(turnId);
+      }
+      ui.setStatus(state.isSpeaking ? "Speaking" : state.isMuted ? "Mic off" : "Listening");
     }
     return;
   }
   if (event.type === "microphone") {
     state.isMuted = Boolean(event.muted);
     ui.setMuted(state.isMuted);
-    ui.setStatus(state.isMuted ? "Microphone off" : "Listening");
+    ui.setStatus(state.isMuted ? "Mic off" : "Listening");
     return;
   }
   if (event.type === "asr_state") {
     ui.setDebug(event.state === "stopped" ? "ASR paused" : "ASR active");
+    return;
+  }
+  if (event.type === "network_buffer") {
+    const seconds = Number(event.prebuffer_seconds);
+    if (Number.isFinite(seconds)) {
+      state.appliedPrebufferSeconds = seconds;
+    }
+    logger?.info("adaptive audio buffer applied", {
+      quality: event.quality || "unknown",
+      prebufferSeconds: state.appliedPrebufferSeconds,
+    });
     return;
   }
   if (event.type === "vad_state") {
@@ -81,4 +103,15 @@ export function handleBridgeEvent(raw, context) {
     ui.setStatus(event.message || "Bridge error");
     ui.setDebug(event.source ? `Error ${event.source}` : "Error");
   }
+}
+
+function resolveTurnId(event, state) {
+  if (event.turn_id) {
+    state.currentTurnId = String(event.turn_id);
+    return state.currentTurnId;
+  }
+  if (!state.currentTurnId) {
+    state.currentTurnId = `legacy-${Date.now()}`;
+  }
+  return state.currentTurnId;
 }
