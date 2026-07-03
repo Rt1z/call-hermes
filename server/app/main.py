@@ -36,6 +36,7 @@ class OfferRequest(BaseModel):
     type: str = "offer"
     tts_voice: str | None = None
     tts_speech_rate: float | None = None
+    vad_silence_ms: int | None = None
 
 
 class OfferResponse(BaseModel):
@@ -187,6 +188,12 @@ async def rtc_offer(
         await old.close()
 
     session_settings = _settings_for_offer(settings, body)
+    logger.info(
+        "session created session_id=%s vad_silence_ms=%d tts_voice=%s",
+        session_id,
+        session_settings.auto_vad_silence_ms,
+        session_settings.dashscope_tts_voice,
+    )
     session = VoiceBridgeSession(
         session_id,
         session_settings,
@@ -223,20 +230,17 @@ async def rtc_config(
 
 
 def _settings_for_offer(settings: Settings, offer: OfferRequest) -> Settings:
-    return _settings_for_tts(
-        settings,
-        tts_voice=offer.tts_voice,
-        tts_speech_rate=offer.tts_speech_rate,
-    )
-
-
-def _settings_for_tts(
-    settings: Settings,
-    *,
-    tts_voice: str | None,
-    tts_speech_rate: float | None,
-) -> Settings:
     update: dict[str, object] = {}
+    _apply_tts_overrides(settings, offer, update)
+    _apply_vad_overrides(offer, update)
+    if not update:
+        return settings
+    return settings.model_copy(update=update)
+
+
+def _apply_tts_overrides(settings: Settings, offer: OfferRequest, update: dict[str, object]) -> None:
+    tts_voice = offer.tts_voice
+    tts_speech_rate = offer.tts_speech_rate
     if tts_voice is not None:
         if tts_voice not in TTS_VOICE_OPTIONS:
             raise HTTPException(
@@ -254,9 +258,21 @@ def _settings_for_tts(
                 ),
             )
         update["dashscope_tts_speech_rate"] = tts_speech_rate
-    if not update:
-        return settings
-    return settings.model_copy(update=update)
+
+
+VAD_SILENCE_MIN_MS = 500
+VAD_SILENCE_MAX_MS = 5000
+
+
+def _apply_vad_overrides(offer: OfferRequest, update: dict[str, object]) -> None:
+    vad_silence_ms = offer.vad_silence_ms
+    if vad_silence_ms is not None:
+        if not VAD_SILENCE_MIN_MS <= vad_silence_ms <= VAD_SILENCE_MAX_MS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"VAD silence must be between {VAD_SILENCE_MIN_MS} and {VAD_SILENCE_MAX_MS} ms",
+            )
+        update["auto_vad_silence_ms"] = vad_silence_ms
 
 
 app.mount("/", StaticFiles(directory="app/static", html=True), name="pwa")

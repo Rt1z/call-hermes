@@ -36,6 +36,7 @@ class HermesClient:
             "model": self._settings.hermes_model,
             "messages": _build_chat_messages(self._settings, user_text, history or []),
             "stream": True,
+            "max_tokens": self._settings.hermes_max_tokens,
         }
 
         timeout = httpx.Timeout(self._settings.hermes_timeout_seconds)

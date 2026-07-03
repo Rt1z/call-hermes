@@ -76,6 +76,7 @@ export function createAuthClient(config, logger = null) {
         sdp: description.sdp,
         tts_voice: options.ttsVoice,
         tts_speech_rate: options.ttsSpeechRate,
+        vad_silence_ms: options.vadSilenceMs,
       }),
     });
     if (!response.ok) {

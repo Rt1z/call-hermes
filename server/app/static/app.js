@@ -35,6 +35,7 @@ const config = {
   sharedSecret: localStorage.getItem("hermes.sharedSecret") || "",
   ttsVoice: localStorage.getItem("hermes.ttsVoice") || "Cherry",
   ttsSpeechRate: readSpeechRate(),
+  vadSilenceMs: readVadSilenceMs(),
   debugMode: localStorage.getItem("hermes.debugMode") === "true",
   audioInputDeviceId: localStorage.getItem("hermes.audioInputDeviceId") || "",
 };
@@ -107,11 +108,13 @@ ui.saveSettingsButton.addEventListener("click", async () => {
   config.sharedSecret = ui.secretInput.value;
   config.ttsVoice = ui.ttsVoiceSelect.value;
   config.ttsSpeechRate = normalizeSpeechRate(ui.speechRateInput.value);
+  config.vadSilenceMs = normalizeVadSilenceMs(ui.vadSilenceInput.value);
   config.debugMode = ui.debugModeInput.checked;
   localStorage.setItem("hermes.bridgeUrl", config.bridgeUrl);
   localStorage.setItem("hermes.sharedSecret", config.sharedSecret);
   localStorage.setItem("hermes.ttsVoice", config.ttsVoice);
   localStorage.setItem("hermes.ttsSpeechRate", String(config.ttsSpeechRate));
+  localStorage.setItem("hermes.vadSilenceMs", String(config.vadSilenceMs));
   localStorage.setItem("hermes.debugMode", String(config.debugMode));
   auth.clearToken();
   clientLogger.info("settings saved", {
@@ -142,6 +145,10 @@ ui.saveSettingsButton.addEventListener("click", async () => {
 
 ui.speechRateInput.addEventListener("input", () => {
   ui.setSpeechRateValue(ui.speechRateInput.value);
+});
+
+ui.vadSilenceInput.addEventListener("input", () => {
+  ui.setVadSilenceValue(ui.vadSilenceInput.value);
 });
 
 ui.ttsVoiceSelect.addEventListener("change", () => {
@@ -252,6 +259,8 @@ function syncSettingsForm() {
   updateVoiceDescription();
   ui.speechRateInput.value = String(config.ttsSpeechRate);
   ui.setSpeechRateValue(config.ttsSpeechRate);
+  ui.vadSilenceInput.value = String(config.vadSilenceMs);
+  ui.setVadSilenceValue(config.vadSilenceMs);
   ui.debugModeInput.checked = config.debugMode;
 }
 
@@ -259,6 +268,7 @@ function getTtsOptions() {
   return {
     ttsVoice: config.ttsVoice,
     ttsSpeechRate: config.ttsSpeechRate,
+    vadSilenceMs: config.vadSilenceMs,
   };
 }
 
@@ -306,6 +316,18 @@ function normalizeSpeechRate(value) {
     return 1;
   }
   return Math.min(2, Math.max(0.5, Number(parsed.toFixed(2))));
+}
+
+function readVadSilenceMs() {
+  return normalizeVadSilenceMs(localStorage.getItem("hermes.vadSilenceMs") || "2500");
+}
+
+function normalizeVadSilenceMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 2500;
+  }
+  return Math.min(5000, Math.max(500, Math.round(parsed / 100) * 100));
 }
 
 function updateVoiceDescription() {

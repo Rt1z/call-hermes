@@ -25,6 +25,8 @@ export function createUi() {
     ttsVoiceDescription: document.querySelector("#ttsVoiceDescription"),
     speechRateInput: document.querySelector("#speechRateInput"),
     speechRateValue: document.querySelector("#speechRateValue"),
+    vadSilenceInput: document.querySelector("#vadSilenceInput"),
+    vadSilenceValue: document.querySelector("#vadSilenceValue"),
     debugModeInput: document.querySelector("#debugModeInput"),
     saveSettingsButton: document.querySelector("#saveSettingsButton"),
   };
@@ -181,6 +183,9 @@ export function createUi() {
     },
     setSpeechRateValue(value) {
       ui.speechRateValue.textContent = `${Number(value).toFixed(2)}x`;
+    },
+    setVadSilenceValue(value) {
+      ui.vadSilenceValue.textContent = `${value}ms`;
     },
   };
 

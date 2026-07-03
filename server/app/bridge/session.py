@@ -167,6 +167,12 @@ class VoiceBridgeSession:
         auto_vad_enabled = self.settings.auto_vad_enabled
         vad_threshold = self.settings.auto_vad_rms_threshold
         silence_seconds = self.settings.auto_vad_silence_ms / 1000
+        logger.info(
+            "session_id=%s vad started silence_ms=%d silence_seconds=%.1f",
+            self.session_id,
+            self.settings.auto_vad_silence_ms,
+            silence_seconds,
+        )
         min_speech_seconds = self.settings.auto_vad_min_speech_ms / 1000
         vad_active = not auto_vad_enabled
         speech_started_at: float | None = None
@@ -368,13 +374,11 @@ class VoiceBridgeSession:
                     buffer += chunk
                     if _should_flush(buffer):
                         normalized = normalizer.feed(buffer) + normalizer.flush()
-                        if normalized:
-                            yield normalized
+                        yield (normalized or buffer)
                         buffer = ""
                 if buffer:
                     normalized = normalizer.feed(buffer) + normalizer.flush()
-                    if normalized:
-                        yield normalized
+                    yield (normalized or buffer)
                 hermes_completed = True
             except Exception as exc:  # noqa: BLE001
                 self.events.emit("error", source="hermes", message=str(exc))

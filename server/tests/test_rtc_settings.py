@@ -35,6 +35,27 @@ def test_offer_rejects_out_of_range_speech_rate() -> None:
         _settings_for_offer(_settings(), OfferRequest(sdp="v=0", tts_speech_rate=2.5))
 
 
+def test_offer_overrides_vad_silence_without_mutating_defaults() -> None:
+    settings = _settings()
+
+    session_settings = _settings_for_offer(
+        settings,
+        OfferRequest(sdp="v=0", vad_silence_ms=1800),
+    )
+
+    assert session_settings.auto_vad_silence_ms == 1800
+    assert settings.auto_vad_silence_ms == 2500
+
+
+@pytest.mark.parametrize("vad_silence_ms", [499, 5001])
+def test_offer_rejects_out_of_range_vad_silence(vad_silence_ms: int) -> None:
+    with pytest.raises(HTTPException):
+        _settings_for_offer(
+            _settings(),
+            OfferRequest(sdp="v=0", vad_silence_ms=vad_silence_ms),
+        )
+
+
 def test_rtc_config_exposes_adaptive_buffer_settings() -> None:
     client = TestClient(app)
     settings = _settings()
@@ -56,7 +77,7 @@ def test_rtc_config_exposes_adaptive_buffer_settings() -> None:
     assert response.status_code == 200
     assert response.json()["audio"] == {
         "adaptive_buffer_enabled": True,
-        "prebuffer_seconds": 0.6,
+        "prebuffer_seconds": 1.0,
         "prebuffer_min_seconds": 0.5,
         "prebuffer_max_seconds": 1.2,
     }

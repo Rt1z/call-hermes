@@ -98,27 +98,13 @@ class Settings(BaseSettings):
     hermes_api_key: str | None = None
     hermes_model: str = "hermes"
     hermes_timeout_seconds: float = 45
+    hermes_max_tokens: int = Field(default=1024, ge=100, le=4096)
     hermes_history_max_turns: int = Field(default=12, ge=1, le=100)
     hermes_history_max_chars: int = Field(default=24000, ge=1000, le=200000)
     hermes_system_prompt: str | None = (
-        "【输出格式强制要求（最高优先级）】\n"
-        "你是一个语音助手，所有回复都将被TTS（文本转语音）系统朗读给用户听。"
-        "因此，你的输出必须严格遵守以下规则：\n\n"
-        "1. 纯文本输出：绝对禁止使用任何Markdown、HTML或格式化标记符号。"
-        "包括但不限于：井号、星号、横线、大于号、反引号、加粗标记、方括号链接等。\n"
-        "2. 使用自然口语：请用完整、流畅的句子表达。禁止使用项目符号列表（如“- 第一点”），"
-        "请改为“第一，”或“首先”等口语化连接词。\n"
-        "3. 结构化朗读：如果内容有层级，请使用“第一层是……，第二层是……”"
-        "或“首先……然后……最后……”等顺序词，而不是用标题或缩进。\n"
-        "4. 标点符号规范：仅使用句号、逗号、问号、叹号。"
-        "避免使用括号、分号、冒号，因为TTS会错误地停顿或朗读出来。\n"
-        "5. 禁止使用代码块：永远不要用反引号包裹任何内容。"
-        "如果需要提及文件名或专有名词，请直接写出，不要加任何符号。\n\n"
-        "【错误示例（禁止）】\n"
-        "**第一步**：打开设置。\n"
-        "- 第二步：点击 `确认按钮`。\n\n"
-        "【正确示例（必须模仿）】\n"
-        "第一步，打开设置。第二步，点击确认按钮。"
+        "你是Hermes，一个语音助手。你在与用户进行持续对话，请记住之前的对话内容。"
+        "回复将直接朗读，禁止Markdown格式，用自然口语短句。"
+        "回答简洁，控制在150字以内，但不要为了简短而牺牲回答质量。"
     )
 
     dashscope_api_key: str | None = None
@@ -128,18 +114,18 @@ class Settings(BaseSettings):
     dashscope_tts_ws_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     dashscope_tts_voice: str = "Cherry"
     dashscope_tts_speech_rate: float = 1.0
-    dashscope_tts_audio_timeout_seconds: float = 45
+    dashscope_tts_audio_timeout_seconds: float = 90
 
     use_mock_asr: bool = False
     use_mock_tts: bool = False
     pwa_max_upload_bytes: int = 10_000_000
-    webrtc_audio_prebuffer_seconds: float = Field(default=0.6, ge=0.1, le=2.0)
+    webrtc_audio_prebuffer_seconds: float = Field(default=1.0, ge=0.1, le=2.0)
     webrtc_adaptive_buffer_enabled: bool = True
     webrtc_audio_prebuffer_min_seconds: float = Field(default=0.5, ge=0.1, le=2.0)
     webrtc_audio_prebuffer_max_seconds: float = Field(default=1.2, ge=0.1, le=2.0)
     auto_vad_enabled: bool = True
     auto_vad_rms_threshold: float = 0.012
-    auto_vad_silence_ms: int = 1000
+    auto_vad_silence_ms: int = 2500
     auto_vad_min_speech_ms: int = 80
     auto_vad_preroll_ms: int = Field(default=500, ge=200, le=1500)
     barge_in_min_chars: int = 3

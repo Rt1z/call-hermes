@@ -105,6 +105,14 @@
             <output id="speechRateValue" for="speechRateInput">1.00x</output>
           </span>
         </label>
+        <label>
+          VAD Pause
+          <span class="range-row">
+            <input id="vadSilenceInput" type="range" min="500" max="5000" step="100" />
+            <output id="vadSilenceValue" for="vadSilenceInput">2500ms</output>
+          </span>
+          <span class="voice-description">How long you pause before Hermes considers you done talking.</span>
+        </label>
         <label class="toggle-row">
           <input id="debugModeInput" type="checkbox" />
           Debug mode
