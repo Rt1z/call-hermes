@@ -642,14 +642,14 @@ export function createCallController({
       const visibleLabel = currentLabel.toLowerCase();
       const isBluetoothLike = /bluetooth|airpods|beats|headset|headphone|耳机/.test(visibleLabel);
       const hasSelectedInput = Boolean(currentTrack || preferredDevice);
-      const shortLabel = isBluetoothLike ? "Headset" : hasSelectedInput ? "iPhone mic" : "Output";
+      const shortLabel = isBluetoothLike ? "Headset" : hasSelectedInput ? "Device mic" : "Output";
       const inputSummary = audioInputs.length
         ? `${audioInputs.length} visible input${audioInputs.length === 1 ? "" : "s"}`
         : "No named inputs exposed";
-      const controlNote = "Tap this icon to choose another exposed microphone. Output follows the iOS system route.";
+      const controlNote = "Tap this icon to choose another exposed microphone. Output follows the system audio route.";
       ui.setDeviceStatus(
         shortLabel,
-        `${inputSummary}. Current input: ${currentLabel}. Output follows iOS system route. ${controlNote}`,
+        `${inputSummary}. Current input: ${currentLabel}. Output follows the system audio route. ${controlNote}`,
       );
       logger?.debug("device status updated", {
         inputs: audioInputs.length,
@@ -660,7 +660,7 @@ export function createCallController({
       logger?.warn("device enumeration failed");
       ui.setDeviceStatus(
         "System audio",
-        "Device details are blocked. Output follows iOS system route.",
+        "Device details are blocked. Output follows the system audio route.",
       );
     }
   }

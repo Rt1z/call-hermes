@@ -294,8 +294,8 @@ async function openAudioDevicePicker() {
     const devices = await call.listAudioInputs({ requestPermission: true });
     ui.setAudioDevices(devices, config.audioInputDeviceId);
     ui.audioDeviceHelp.textContent = devices.length > 1
-      ? "Choose a microphone. Speaker output still follows the iOS audio route."
-      : "Only one microphone is exposed by Safari. Connect the Bluetooth device in iOS Control Center, then reopen this list.";
+      ? "Choose a microphone. Speaker output still follows the system audio route."
+      : "Only one microphone is exposed by the browser. Connect or select the Bluetooth device in system settings, then reopen this list.";
   } catch (error) {
     ui.setStatus("Mic error");
     ui.setDebug(error.message || "Unable to list microphones.");
