@@ -8,75 +8,62 @@ from playwright.async_api import BrowserType, async_playwright
 
 BASE_URL = os.environ.get("BASE_URL", "https://127.0.0.1:10005").rstrip("/")
 SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
+SELECTED_BROWSER = os.environ.get("BROWSER", "").strip().lower()
 
 
 async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
     browser = await engine.launch(headless=True)
-    context = await browser.new_context(ignore_https_errors=True, service_workers="block")
-    page = await context.new_page()
+    try:
+        context = await browser.new_context(ignore_https_errors=True, service_workers="block")
+        page = await context.new_page()
 
-    init_script = """(() => {
+        init_script = """(() => {
             try {
                 localStorage.setItem('hermes.sharedSecret', __SHARED_SECRET__);
                 localStorage.setItem('hermes.debugMode', 'true');
             } catch (_) {
                 // about:blank has no local storage; the script runs again on navigation.
             }
-            if (!navigator.mediaDevices) return;
-            navigator.mediaDevices.getUserMedia = async () => {
-                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                const context = new AudioContextClass();
-                const oscillator = context.createOscillator();
-                const gain = context.createGain();
-                const destination = context.createMediaStreamDestination();
-                gain.gain.value = 0.001;
-                oscillator.connect(gain).connect(destination);
-                oscillator.start();
-                window.__hermesTestAudio = { context, oscillator };
-                return destination.stream;
-            };
-            navigator.mediaDevices.enumerateDevices = async () => [{
-                deviceId: 'ci-microphone',
-                groupId: 'ci',
-                kind: 'audioinput',
-                label: 'CI synthetic microphone',
-                toJSON() { return this; },
-            }];
         })()""".replace("__SHARED_SECRET__", json.dumps(SHARED_SECRET))
-    await page.add_init_script(init_script)
+        await page.add_init_script(init_script)
 
-    async def use_host_candidates(route) -> None:  # type: ignore[no-untyped-def]
-        response = await route.fetch()
-        payload = await response.json()
-        payload["ice_servers"] = []
-        await route.fulfill(response=response, json=payload)
+        async def use_host_candidates(route) -> None:  # type: ignore[no-untyped-def]
+            response = await route.fetch()
+            payload = await response.json()
+            payload["ice_servers"] = []
+            await route.fulfill(response=response, json=payload)
 
-    await page.route("**/rtc/config", use_host_candidates)
-    await page.goto(BASE_URL)
-    await page.click("#recordButton")
-    await page.click("#newConversationButton")
-    try:
+        await page.route("**/rtc/config", use_host_candidates)
+        await page.goto(BASE_URL)
+        await page.click("#recordButton")
+        await page.click("#newConversationButton")
         await page.locator("#status", has_text="Mic off").wait_for(timeout=20_000)
-        result = "connected"
         await page.evaluate("document.querySelector('#recordButton').click()")
         await page.locator("#status", has_text="Ready").wait_for(timeout=5_000)
-    except Exception:  # noqa: BLE001
-        result = await page.locator("#status").inner_text()
-    await browser.close()
-    return name, result
+        return name, "connected"
+    except Exception as error:  # noqa: BLE001
+        detail = f"{type(error).__name__}: {error}".replace("\n", " ")
+        print(f"::error title={name} WebRTC smoke failed::{detail}")
+        return name, detail
+    finally:
+        await browser.close()
 
 
 async def main() -> None:
     if not SHARED_SECRET:
         raise SystemExit("Set APP_SHARED_SECRET before running this smoke test")
     async with async_playwright() as playwright:
+        engines = {
+            "chromium": playwright.chromium,
+            "firefox": playwright.firefox,
+            "webkit": playwright.webkit,
+        }
+        if SELECTED_BROWSER and SELECTED_BROWSER not in engines:
+            raise SystemExit(f"Unsupported BROWSER: {SELECTED_BROWSER}")
+        selected = [SELECTED_BROWSER] if SELECTED_BROWSER else list(engines)
         results = []
-        for name, engine in (
-            ("chromium", playwright.chromium),
-            ("firefox", playwright.firefox),
-            ("webkit", playwright.webkit),
-        ):
-            results.append(await run_engine(name, engine))
+        for name in selected:
+            results.append(await run_engine(name, engines[name]))
     failures = [result for result in results if result[1] != "connected"]
     print(results)
     if failures:

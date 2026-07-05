@@ -37,12 +37,17 @@ jobs:
 
   browser-smoke:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    name: browser-smoke (${{ matrix.browser }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - run: pip install -e server playwright
-      - run: playwright install --with-deps chromium firefox webkit
+      - run: playwright install --with-deps ${{ matrix.browser }}
       - name: Start mock voice bridge
         env:
           APP_SHARED_SECRET: ci-shared-secret-32-characters-long
@@ -57,6 +62,7 @@ jobs:
         env:
           APP_SHARED_SECRET: ci-shared-secret-32-characters-long
           BASE_URL: http://127.0.0.1:10005
+          BROWSER: ${{ matrix.browser }}
         run: python scripts/e2e_browser_smoke.py
       - name: Show voice bridge log on failure
         if: failure()
