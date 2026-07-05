@@ -15,6 +15,7 @@ async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
     launch_options: dict[str, object] = {"headless": True}
     if name == "firefox":
         launch_options["firefox_user_prefs"] = {
+            "media.peerconnection.ice.loopback": True,
             "media.peerconnection.ice.obfuscate_host_addresses": False,
         }
     browser = await engine.launch(**launch_options)
