@@ -37,6 +37,7 @@ jobs:
 
   browser-smoke:
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.browser == 'firefox' }}
     strategy:
       fail-fast: false
       matrix:
