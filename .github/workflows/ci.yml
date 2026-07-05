@@ -58,3 +58,6 @@ jobs:
           APP_SHARED_SECRET: ci-shared-secret-32-characters-long
           BASE_URL: http://127.0.0.1:10005
         run: python scripts/e2e_browser_smoke.py
+      - name: Show voice bridge log on failure
+        if: failure()
+        run: cat /tmp/call-hermes.log

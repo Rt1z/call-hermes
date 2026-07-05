@@ -15,16 +15,35 @@ async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
     context = await browser.new_context(ignore_https_errors=True, service_workers="block")
     page = await context.new_page()
 
-    await page.add_init_script(
-        f"""(() => {{
-            try {{
-                localStorage.setItem('hermes.sharedSecret', {json.dumps(SHARED_SECRET)});
+    init_script = """(() => {
+            try {
+                localStorage.setItem('hermes.sharedSecret', __SHARED_SECRET__);
                 localStorage.setItem('hermes.debugMode', 'true');
-            }} catch (_) {{
+            } catch (_) {
                 // about:blank has no local storage; the script runs again on navigation.
-            }}
-        }})()"""
-    )
+            }
+            if (!navigator.mediaDevices) return;
+            navigator.mediaDevices.getUserMedia = async () => {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                const context = new AudioContextClass();
+                const oscillator = context.createOscillator();
+                const gain = context.createGain();
+                const destination = context.createMediaStreamDestination();
+                gain.gain.value = 0.001;
+                oscillator.connect(gain).connect(destination);
+                oscillator.start();
+                window.__hermesTestAudio = { context, oscillator };
+                return destination.stream;
+            };
+            navigator.mediaDevices.enumerateDevices = async () => [{
+                deviceId: 'ci-microphone',
+                groupId: 'ci',
+                kind: 'audioinput',
+                label: 'CI synthetic microphone',
+                toJSON() { return this; },
+            }];
+        })()""".replace("__SHARED_SECRET__", json.dumps(SHARED_SECRET))
+    await page.add_init_script(init_script)
 
     async def use_host_candidates(route) -> None:  # type: ignore[no-untyped-def]
         response = await route.fetch()
