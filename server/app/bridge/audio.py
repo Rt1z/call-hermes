@@ -2,6 +2,7 @@ import asyncio
 import logging
 import math
 import time
+from collections.abc import Callable
 from fractions import Fraction
 
 import av
@@ -34,6 +35,8 @@ class QueueAudioTrack(AudioStreamTrack):
         max_prebuffer_seconds: float = 1.0,
         logger: logging.Logger | None = None,
         session_id: str = "-",
+        on_underrun: Callable[[], None] | None = None,
+        rebuffer_step_seconds: float = 0.2,
     ) -> None:
         super().__init__()
         self.sample_rate = sample_rate
@@ -44,6 +47,8 @@ class QueueAudioTrack(AudioStreamTrack):
         self.prebuffer_bytes = 0
         self._logger = logger
         self._session_id = session_id
+        self._on_underrun = on_underrun
+        self._rebuffer_step_seconds = max(0, rebuffer_step_seconds)
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=100)
         self._resampler = AudioResampler(format="s16", layout="mono", rate=sample_rate)
         self._buffer = bytearray()
@@ -167,6 +172,9 @@ class QueueAudioTrack(AudioStreamTrack):
             self._playing_audio = False
             self._underrun_frames += 1
             self._rebuffer_count += 1
+            if self._on_underrun:
+                self._on_underrun()
+            self.set_prebuffer_seconds(self.prebuffer_seconds + self._rebuffer_step_seconds)
             if self._logger:
                 self._logger.warning(
                     "session_id=%s audio underrun rebuffer=%d buffered_bytes=%d target_bytes=%d",

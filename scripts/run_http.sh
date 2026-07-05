@@ -13,7 +13,6 @@ if [ ! -d ".venv" ]; then
   "${PYTHON_BIN}" -m venv .venv
 fi
 
-source .venv/bin/activate
-pip install -q -e ".[dev]"
+./.venv/bin/pip install -q -e ".[dev]"
 
-exec uvicorn app.main:app --host "${HOST}" --port "${PORT}"
+exec ./.venv/bin/uvicorn app.main:app --host "${HOST}" --port "${PORT}"

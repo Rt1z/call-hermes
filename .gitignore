@@ -14,6 +14,8 @@ server/.env
 *.pid
 *.log
 server/logs/
+server/data/
+server/backups/
 ssl/*.key
 ssl/*.pem
 ssl/*.crt

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: server/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg shellcheck
+      - run: python -m venv server/.venv && server/.venv/bin/pip install --upgrade pip && server/.venv/bin/pip install -e 'server[dev]' pip-audit bandit
+      - run: server/.venv/bin/ruff check server/app server/tests scripts
+      - run: server/.venv/bin/pytest -q server/tests
+      - run: node scripts/test_frontend.mjs
+      - run: node scripts/test_auth_frontend.mjs
+      - run: shellcheck scripts/*.sh
+      - run: server/.venv/bin/bandit -q -r server/app -x server/tests
+      - run: server/.venv/bin/pip-audit --skip-editable
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e server playwright
+      - run: playwright install --with-deps chromium firefox webkit
+      - name: Start mock voice bridge
+        env:
+          APP_SHARED_SECRET: ci-shared-secret-32-characters-long
+          JWT_SECRET: ci-jwt-secret-value-32-characters
+          PUBLIC_BASE_URL: http://127.0.0.1:10005
+          CONVERSATION_DATABASE_PATH: /tmp/call-hermes-ci.sqlite3
+          USE_MOCK_ASR: "true"
+          USE_MOCK_TTS: "true"
+        run: uvicorn app.main:app --app-dir server --host 127.0.0.1 --port 10005 > /tmp/call-hermes.log 2>&1 &
+      - run: curl --retry 20 --retry-delay 1 --retry-connrefused http://127.0.0.1:10005/live
+      - name: Run browser WebRTC smoke
+        env:
+          APP_SHARED_SECRET: ci-shared-secret-32-characters-long
+          BASE_URL: http://127.0.0.1:10005
+        run: python scripts/e2e_browser_smoke.py

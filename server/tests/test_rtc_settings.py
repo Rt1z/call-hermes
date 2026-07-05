@@ -2,6 +2,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.config import Settings
+from app.auth import create_session_token
 from app.main import OfferRequest, app, _settings_for_offer
 from fastapi.testclient import TestClient
 
@@ -47,6 +48,26 @@ def test_offer_overrides_vad_silence_without_mutating_defaults() -> None:
     assert settings.auto_vad_silence_ms == 2500
 
 
+def test_offer_overrides_assistant_profile() -> None:
+    settings = _settings()
+    session_settings = _settings_for_offer(
+        settings,
+        OfferRequest(
+            sdp="v=0",
+            hermes_model="hermes-expert",
+            system_prompt="Be precise.",
+            language="en-US",
+            max_tokens=1800,
+            history_max_turns=24,
+        ),
+    )
+    assert session_settings.hermes_model == "hermes-expert"
+    assert session_settings.hermes_system_prompt is not None
+    assert "Reply in English" in session_settings.hermes_system_prompt
+    assert session_settings.hermes_max_tokens == 1800
+    assert session_settings.hermes_history_max_turns == 24
+
+
 @pytest.mark.parametrize("vad_silence_ms", [499, 5001])
 def test_offer_rejects_out_of_range_vad_silence(vad_silence_ms: int) -> None:
     with pytest.raises(HTTPException):
@@ -63,10 +84,7 @@ def test_rtc_config_exposes_adaptive_buffer_settings() -> None:
 
     app.dependency_overrides[get_settings] = lambda: settings
     try:
-        auth = client.post(
-            "/auth/session",
-            json={"shared_secret": "x" * 32},
-        ).json()
+        auth = create_session_token(settings)
         response = client.get(
             "/rtc/config",
             headers={"Authorization": f"Bearer {auth['token']}"},

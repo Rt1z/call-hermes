@@ -91,13 +91,26 @@ class Settings(BaseSettings):
     app_shared_secret: str = Field(min_length=16)
     jwt_secret: str = Field(min_length=16)
     jwt_ttl_seconds: int = 900
+    refresh_token_ttl_days: int = Field(default=30, ge=1, le=365)
+    bootstrap_admin_username: str = "admin"
+    allow_legacy_shared_secret_auth: bool = False
     auth_rate_limit_requests: int = 20
     auth_rate_limit_window_seconds: int = 60
+    auth_lockout_failures: int = Field(default=5, ge=3, le=100)
+    auth_lockout_seconds: int = Field(default=900, ge=60, le=86400)
+    client_log_rate_limit_requests: int = 120
+    client_log_rate_limit_window_seconds: int = 60
+    monitoring_token: str | None = None
+    dependency_health_cache_seconds: float = Field(default=5, ge=0, le=60)
+    conversation_database_path: str = "data/conversations.sqlite3"
+    max_concurrent_sessions: int = Field(default=8, ge=1, le=1000)
 
     hermes_base_url: str = "http://127.0.0.1:8000"
     hermes_api_key: str | None = None
     hermes_model: str = "hermes"
     hermes_timeout_seconds: float = 45
+    hermes_max_attempts: int = Field(default=2, ge=1, le=5)
+    hermes_retry_backoff_seconds: float = Field(default=0.4, ge=0, le=10)
     hermes_max_tokens: int = Field(default=1024, ge=100, le=4096)
     hermes_history_max_turns: int = Field(default=12, ge=1, le=100)
     hermes_history_max_chars: int = Field(default=24000, ge=1000, le=200000)
@@ -115,6 +128,7 @@ class Settings(BaseSettings):
     dashscope_tts_voice: str = "Cherry"
     dashscope_tts_speech_rate: float = 1.0
     dashscope_tts_audio_timeout_seconds: float = 90
+    dashscope_control_timeout_seconds: float = Field(default=12, ge=1, le=120)
 
     use_mock_asr: bool = False
     use_mock_tts: bool = False
@@ -123,6 +137,8 @@ class Settings(BaseSettings):
     webrtc_adaptive_buffer_enabled: bool = True
     webrtc_audio_prebuffer_min_seconds: float = Field(default=0.5, ge=0.1, le=2.0)
     webrtc_audio_prebuffer_max_seconds: float = Field(default=1.2, ge=0.1, le=2.0)
+    webrtc_rebuffer_step_seconds: float = Field(default=0.2, ge=0.05, le=1.0)
+    webrtc_session_idle_timeout_seconds: int = Field(default=45, ge=30, le=3600)
     auto_vad_enabled: bool = True
     auto_vad_rms_threshold: float = 0.012
     auto_vad_silence_ms: int = 2500
@@ -130,6 +146,8 @@ class Settings(BaseSettings):
     auto_vad_preroll_ms: int = Field(default=500, ge=200, le=1500)
     barge_in_min_chars: int = 3
     barge_in_cooldown_ms: int = 500
+    barge_in_echo_similarity: float = Field(default=0.62, ge=0.3, le=1.0)
+    barge_in_acoustic_echo_similarity: float = Field(default=0.35, ge=0.1, le=1.0)
 
     ice_stun_urls: str = "stun:stun.l.google.com:19302"
     ice_turn_urls: str = ""

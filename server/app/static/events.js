@@ -15,6 +15,13 @@ export function handleBridgeEvent(raw, context) {
     ui.setStatus(state.isMuted ? "Mic off" : "Listening");
     return;
   }
+  if (event.type === "session_terminated") {
+    state.remoteTerminated = true;
+    ui.setStatus("Session ended");
+    logger?.info("session terminated remotely");
+    context.onSessionTerminated?.();
+    return;
+  }
   if (event.type === "partial_transcript") {
     const turnId = resolveTurnId(event, state);
     ui.setTurnUser(turnId, event.text || "", { partial: true });
@@ -26,6 +33,7 @@ export function handleBridgeEvent(raw, context) {
     state.currentTranscript = event.text || "";
     state.currentAnswer = "";
     state.turnAnswers.set(turnId, "");
+    state.pendingTurn = true;
     ui.setTurnUser(turnId, state.currentTranscript);
     ui.setTurnThinking(turnId);
     ui.setStatus("Thinking");
@@ -51,10 +59,12 @@ export function handleBridgeEvent(raw, context) {
     const turnId = event.turn_id || state.currentTurnId;
     state.isSpeaking = event.state === "start";
     if (event.state === "interrupted") {
+      state.pendingTurn = false;
       ui.setTurnInterrupted(turnId);
       ui.setStatus("Interrupted");
     } else {
       if (event.state === "end") {
+        state.pendingTurn = false;
         ui.setTurnComplete(turnId);
       }
       ui.setStatus(state.isSpeaking ? "Speaking" : state.isMuted ? "Mic off" : "Listening");
@@ -80,6 +90,21 @@ export function handleBridgeEvent(raw, context) {
       quality: event.quality || "unknown",
       prebufferSeconds: state.appliedPrebufferSeconds,
     });
+    return;
+  }
+  if (event.type === "turn_metrics") {
+    const metrics = event.metrics || {};
+    let history = [];
+    try {
+      history = JSON.parse(localStorage.getItem("hermes.qualityHistory") || "[]");
+      if (!Array.isArray(history)) history = [];
+    } catch {
+      history = [];
+    }
+    history.push({ at: new Date().toISOString(), ...metrics });
+    history = history.slice(-50);
+    localStorage.setItem("hermes.qualityHistory", JSON.stringify(history));
+    ui.setQualityMetrics(metrics, history);
     return;
   }
   if (event.type === "vad_state") {

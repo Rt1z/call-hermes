@@ -19,7 +19,9 @@ export function createClientLogger({ ui, getBridgeUrl }) {
       `[client] ${entry.message}`,
       entry.details,
     );
-    send(entry);
+    if (level !== "debug") {
+      send(entry);
+    }
   }
 
   function send(entry) {

@@ -1,4 +1,5 @@
-import subprocess
+# ffmpeg is invoked without a shell and only receives fixed flags plus temporary paths.
+import subprocess  # nosec B404
 import tempfile
 import wave
 import os
@@ -26,7 +27,7 @@ def transcode_to_pcm16_mono_16k(input_bytes: bytes, suffix: str) -> bytes:
             "s16le",
             str(output_path),
         ]
-        subprocess.run(command, check=True, capture_output=True)
+        subprocess.run(command, check=True, capture_output=True)  # nosec B603
         return output_path.read_bytes()
 
 
@@ -53,7 +54,7 @@ def transcode_to_wav_mono_16k_file(input_bytes: bytes, suffix: str) -> str:
             tmp.name,
         ]
         try:
-            subprocess.run(command, check=True, capture_output=True)
+            subprocess.run(command, check=True, capture_output=True)  # nosec B603
         except subprocess.CalledProcessError as exc:
             try:
                 os.unlink(tmp.name)

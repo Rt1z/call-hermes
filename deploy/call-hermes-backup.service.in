@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up Call Hermes conversations
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@ROOT@
+EnvironmentFile=@ROOT@/server/.env
+ExecStart=@ROOT@/scripts/backup_conversations.sh

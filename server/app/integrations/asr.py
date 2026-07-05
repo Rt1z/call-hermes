@@ -7,6 +7,7 @@ import dashscope
 from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
 
 from app.config import Settings
+from app.circuit_breaker import asr_breaker
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class DashScopeASRSession:
         self._loop = asyncio.get_running_loop()
 
     async def start(self) -> None:
+        asr_breaker.before_call()
         dashscope.api_key = self._settings.dashscope_api_key
         dashscope.base_websocket_api_url = self._settings.dashscope_asr_ws_url
         callback = _RecognitionCallback(self._loop, self._on_transcript, self._on_error)
@@ -49,16 +51,34 @@ class DashScopeASRSession:
             semantic_punctuation_enabled=False,
             callback=callback,
         )
-        await asyncio.to_thread(self._recognition.start)
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._recognition.start),
+                timeout=self._settings.dashscope_control_timeout_seconds,
+            )
+        except Exception:
+            asr_breaker.record_failure()
+            raise
+        asr_breaker.record_success()
 
     async def send_pcm16(self, pcm: bytes) -> None:
         if self._recognition:
-            await asyncio.to_thread(self._recognition.send_audio_frame, pcm)
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(self._recognition.send_audio_frame, pcm),
+                    timeout=self._settings.dashscope_control_timeout_seconds,
+                )
+            except Exception:
+                asr_breaker.record_failure()
+                raise
 
     async def stop(self) -> None:
         if self._recognition:
             try:
-                await asyncio.to_thread(self._recognition.stop)
+                await asyncio.wait_for(
+                    asyncio.to_thread(self._recognition.stop),
+                    timeout=self._settings.dashscope_control_timeout_seconds,
+                )
             except Exception as exc:  # noqa: BLE001
                 if "has stopped" not in str(exc):
                     raise

@@ -4,7 +4,13 @@ from app.bridge.audio import QueueAudioTrack
 
 
 async def test_playback_rebuffers_instead_of_alternating_audio_and_silence() -> None:
-    track = QueueAudioTrack(prebuffer_seconds=0)
+    underruns = 0
+
+    def on_underrun() -> None:
+        nonlocal underruns
+        underruns += 1
+
+    track = QueueAudioTrack(prebuffer_seconds=0, on_underrun=on_underrun)
     pcm = np.zeros(960, dtype=np.int16).tobytes()
 
     await track.push_pcm16(pcm, sample_rate=48000)
@@ -18,6 +24,8 @@ async def test_playback_rebuffers_instead_of_alternating_audio_and_silence() -> 
     assert track._playing_audio is False
     assert track._underrun_frames == 1
     assert track._rebuffer_count == 1
+    assert underruns == 1
+    assert track.prebuffer_seconds == 0.2
 
     track.finish_utterance()
     await track.recv()
@@ -27,7 +35,7 @@ async def test_playback_rebuffers_instead_of_alternating_audio_and_silence() -> 
 
 
 async def test_playback_resumes_after_prebuffer_refills() -> None:
-    track = QueueAudioTrack(prebuffer_seconds=0.04)
+    track = QueueAudioTrack(prebuffer_seconds=0.04, rebuffer_step_seconds=0)
     pcm = np.zeros(1920, dtype=np.int16).tobytes()
 
     await track.push_pcm16(pcm, sample_rate=48000)

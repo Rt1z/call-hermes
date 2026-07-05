@@ -1,38 +1,64 @@
 export function createAuthClient(config, logger = null) {
-  let token = localStorage.getItem("hermes.token") || "";
+  let token = "";
+  let tokenPromise = null;
+  let hasAuthenticated = false;
+  localStorage.removeItem("hermes.token");
 
   function clearToken() {
     token = "";
-    localStorage.removeItem("hermes.token");
   }
 
   async function ensureToken() {
     if (token) {
       return token;
     }
-    logger?.info("auth/session start", { bridgeUrl: config.bridgeUrl });
+    if (tokenPromise) {
+      return tokenPromise;
+    }
+    tokenPromise = acquireToken();
+    try {
+      return await tokenPromise;
+    } finally {
+      tokenPromise = null;
+    }
+  }
+
+  async function acquireToken() {
+    logger?.info("auth refresh start", { bridgeUrl: config.bridgeUrl });
     let response;
     try {
-      response = await fetch(`${config.bridgeUrl}/auth/session`, {
+      response = await fetch(`${config.bridgeUrl}/auth/refresh`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shared_secret: config.sharedSecret,
-          device_name: navigator.userAgent,
-        }),
+        credentials: "include",
       });
+      if (!response.ok && !hasAuthenticated && config.sharedSecret) {
+        response = await fetch(`${config.bridgeUrl}/auth/login`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: config.username || "admin",
+            password: config.sharedSecret,
+            device_name: navigator.userAgent,
+            device_id: localStorage.getItem("hermes.deviceId") || null,
+          }),
+        });
+      }
     } catch (error) {
-      logger?.error("auth/session network failed", errorDetails(error));
+      logger?.error("authentication network failed", errorDetails(error));
       throw error;
     }
     if (!response.ok) {
-      logger?.error("auth/session failed", { status: response.status, error: await formatError(response.clone()) });
+      logger?.error("authentication failed", { status: response.status, error: await formatError(response.clone()) });
       throw new Error("Authentication failed");
     }
     const session = await response.json();
     token = session.token;
-    localStorage.setItem("hermes.token", token);
-    logger?.info("auth/session ok", { expiresAt: session.expires_at });
+    hasAuthenticated = true;
+    if (session.device_id) {
+      localStorage.setItem("hermes.deviceId", session.device_id);
+    }
+    logger?.info("authentication ok", { expiresAt: session.expires_at });
     return token;
   }
 
@@ -43,7 +69,7 @@ export function createAuthClient(config, logger = null) {
     logger?.debug("fetch start", { url, method: options.method || "GET" });
     let response;
     try {
-      response = await fetch(url, { ...options, headers });
+      response = await fetch(url, { ...options, headers, credentials: "include" });
     } catch (error) {
       logger?.error("fetch network failed", { ...errorDetails(error), url, method: options.method || "GET" });
       throw error;
@@ -74,9 +100,16 @@ export function createAuthClient(config, logger = null) {
       body: JSON.stringify({
         type: description.type,
         sdp: description.sdp,
+        preserve_conversation: options.preserveConversation !== false,
+        conversation_id: options.conversationId,
         tts_voice: options.ttsVoice,
         tts_speech_rate: options.ttsSpeechRate,
         vad_silence_ms: options.vadSilenceMs,
+        hermes_model: options.hermesModel,
+        system_prompt: options.systemPrompt,
+        max_tokens: options.maxTokens,
+        history_max_turns: options.historyMaxTurns,
+        language: options.language,
       }),
     });
     if (!response.ok) {
@@ -87,10 +120,28 @@ export function createAuthClient(config, logger = null) {
     return payload;
   }
 
-  async function sendPwaTurn(audioBlob) {
+  async function sendPwaTurn(audioBlob, options = {}) {
     const formData = new FormData();
     const extension = audioBlob.type.includes("mp4") ? "m4a" : "webm";
     formData.append("audio", audioBlob, `recording.${extension}`);
+    if (options.conversationId) {
+      formData.append("conversation_id", options.conversationId);
+    }
+    if (options.ttsVoice) {
+      formData.append("tts_voice", options.ttsVoice);
+    }
+    if (options.ttsSpeechRate) {
+      formData.append("tts_speech_rate", String(options.ttsSpeechRate));
+    }
+    for (const [key, value] of [
+      ["hermes_model", options.hermesModel],
+      ["system_prompt", options.systemPrompt],
+      ["max_tokens", options.maxTokens],
+      ["history_max_turns", options.historyMaxTurns],
+      ["language", options.language],
+    ]) {
+      if (value !== undefined && value !== null && value !== "") formData.append(key, String(value));
+    }
     const response = await authorizedFetch(`${config.bridgeUrl}/pwa/turn`, {
       method: "POST",
       body: formData,
@@ -103,7 +154,132 @@ export function createAuthClient(config, logger = null) {
     return payload;
   }
 
-  return { clearToken, ensureToken, fetchRtcConfig, sendOffer, sendPwaTurn };
+  async function closeSession() {
+    if (!token) {
+      return;
+    }
+    try {
+      const response = await fetch(`${config.bridgeUrl}/rtc/session`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+        keepalive: true,
+        credentials: "include",
+      });
+      logger?.info("rtc/session closed", { status: response.status });
+    } catch (error) {
+      logger?.warn("rtc/session close failed", errorDetails(error));
+    }
+  }
+
+  async function fetchConversation(conversationId) {
+    const response = await authorizedFetch(
+      `${config.bridgeUrl}/conversations/${encodeURIComponent(conversationId)}`,
+    );
+    if (!response.ok) {
+      throw new Error(await formatError(response));
+    }
+    return response.json();
+  }
+
+  async function listConversations(query = "", offset = 0, limit = 25) {
+    const params = new URLSearchParams({ query, offset: String(offset), limit: String(limit) });
+    const response = await authorizedFetch(`${config.bridgeUrl}/conversations?${params}`);
+    if (!response.ok) {
+      throw new Error(await formatError(response));
+    }
+    return response.json();
+  }
+
+  async function deleteConversation(conversationId) {
+    const response = await authorizedFetch(
+      `${config.bridgeUrl}/conversations/${encodeURIComponent(conversationId)}`,
+      { method: "DELETE" },
+    );
+    if (!response.ok) {
+      throw new Error(await formatError(response));
+    }
+  }
+
+  async function updateConversation(conversationId, changes) {
+    const response = await authorizedFetch(
+      `${config.bridgeUrl}/conversations/${encodeURIComponent(conversationId)}`,
+      { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) },
+    );
+    if (!response.ok) throw new Error(await formatError(response));
+    return response.json();
+  }
+
+  async function listRtcSessions() {
+    const response = await authorizedFetch(`${config.bridgeUrl}/rtc/sessions`);
+    if (!response.ok) {
+      throw new Error(await formatError(response));
+    }
+    return response.json();
+  }
+
+  async function terminateRtcSession(sessionId) {
+    const response = await authorizedFetch(
+      `${config.bridgeUrl}/rtc/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    );
+    if (!response.ok) {
+      throw new Error(await formatError(response));
+    }
+  }
+
+  async function listDevices() {
+    const response = await authorizedFetch(`${config.bridgeUrl}/auth/devices`);
+    if (!response.ok) throw new Error(await formatError(response));
+    return response.json();
+  }
+
+  async function revokeDevice(deviceId) {
+    const response = await authorizedFetch(
+      `${config.bridgeUrl}/auth/devices/${encodeURIComponent(deviceId)}`,
+      { method: "DELETE" },
+    );
+    if (!response.ok) throw new Error(await formatError(response));
+    return response.json();
+  }
+
+  async function logout() {
+    try {
+      await ensureToken();
+      await authorizedFetch(`${config.bridgeUrl}/auth/logout`, { method: "POST" }, false);
+    } catch (error) {
+      logger?.warn("logout request failed", errorDetails(error));
+    } finally {
+      clearToken();
+    }
+  }
+
+  async function changePassword(currentPassword, newPassword) {
+    const response = await authorizedFetch(`${config.bridgeUrl}/auth/password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+    if (!response.ok) throw new Error(await formatError(response));
+  }
+
+  return {
+    clearToken,
+    ensureToken,
+    fetchRtcConfig,
+    sendOffer,
+    sendPwaTurn,
+    closeSession,
+    fetchConversation,
+    listConversations,
+    deleteConversation,
+    updateConversation,
+    listRtcSessions,
+    terminateRtcSession,
+    listDevices,
+    revokeDevice,
+    logout,
+    changePassword,
+  };
 }
 
 function errorDetails(error) {

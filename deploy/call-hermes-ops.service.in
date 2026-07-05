@@ -1,0 +1,10 @@
+[Unit]
+Description=Call Hermes operational health check
+After=call-hermes.service
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@ROOT@
+EnvironmentFile=@ROOT@/server/.env
+ExecStart=@ROOT@/scripts/operational_check.sh

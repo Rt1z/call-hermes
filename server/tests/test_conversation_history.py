@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 
 import app.bridge.session as session_module
@@ -129,6 +130,66 @@ async def test_second_response_receives_first_completed_turn(monkeypatch) -> Non
     ]
     assert turn_events
     assert {event.payload.get("turn_id") for event in turn_events} == {"turn-1", "turn-2"}
+
+
+async def test_interrupted_turn_is_available_to_next_response(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    first_started = asyncio.Event()
+    received_histories: list[tuple[str, list[dict[str, str]]]] = []
+
+    class FakeHermesClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def stream_chat(
+            self,
+            user_text: str,
+            history: list[dict[str, str]] | None = None,
+        ) -> AsyncIterator[str]:
+            received_histories.append((user_text, [dict(message) for message in history or []]))
+            if user_text == "first interrupted question":
+                first_started.set()
+                await asyncio.Event().wait()
+            yield "second answer"
+
+    class FakeTTS:
+        async def synthesize_stream(self, chunks: AsyncIterator[str]) -> AsyncIterator[bytes]:
+            async for _chunk in chunks:
+                pass
+            if False:
+                yield b""
+
+    class FakeOutputTrack:
+        async def push_pcm16(self, pcm: bytes, sample_rate: int) -> None:
+            pass
+
+        def finish_utterance(self) -> None:
+            pass
+
+        async def wait_until_idle(self) -> None:
+            pass
+
+        def clear(self) -> None:
+            pass
+
+        async def close_queue(self) -> None:
+            pass
+
+    monkeypatch.setattr(session_module, "HermesClient", FakeHermesClient)
+    monkeypatch.setattr(session_module, "create_tts_session", lambda _settings: FakeTTS())
+    session = VoiceBridgeSession("test-session", _settings())
+    session.output_track = FakeOutputTrack()  # type: ignore[assignment]
+
+    session._schedule_response("first interrupted question", None, "turn-interrupted")
+    await first_started.wait()
+    session._schedule_response("follow-up question", None, "turn-follow-up")
+    assert session._respond_task is not None
+    await session._respond_task
+    await session.close()
+
+    assert received_histories[1] == (
+        "follow-up question",
+        [{"role": "user", "content": "first interrupted question"}],
+    )
 
 
 async def test_assistant_echo_does_not_confirm_barge_in(monkeypatch) -> None:  # type: ignore[no-untyped-def]

@@ -1,0 +1,53 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active sessions",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "call_hermes_active_sessions", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Turn errors (1h)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "increase(call_hermes_turn_errors_total[1h])", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Response latency",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "expr": "call_hermes_hermes_ttft_ms_last", "legendFormat": "Hermes TTFT", "refId": "A" },
+        { "expr": "call_hermes_tts_ttfa_ms_last", "legendFormat": "TTS TTFA", "refId": "B" },
+        { "expr": "call_hermes_turn_response_ms_last", "legendFormat": "Total", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Audio underruns and interruptions",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "increase(call_hermes_audio_underruns_total[10m])", "legendFormat": "Underruns", "refId": "A" },
+        { "expr": "increase(call_hermes_turns_interrupted_total[10m])", "legendFormat": "Interrupted", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Provider circuit state",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [{ "expr": "call_hermes_circuit_open", "legendFormat": "{{provider}}", "refId": "A" }]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["call-hermes", "voice"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "Call Hermes Voice Quality",
+  "uid": "call-hermes-voice",
+  "version": 1
+}

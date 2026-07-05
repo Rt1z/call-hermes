@@ -1,7 +1,9 @@
 import { handleBridgeEvent } from "./events.js";
 
 const CONNECTION_RECOVERY_MS = 5000;
-const MAX_RECONNECT_ATTEMPTS = 0;
+const ICE_CHECK_TIMEOUT_MS = 20000;
+const SESSION_HEARTBEAT_MS = 15000;
+const MAX_RECONNECT_ATTEMPTS = 2;
 const NETWORK_STATS_INTERVAL_MS = 2000;
 const NETWORK_LOSS_WINDOW_MS = 12000;
 const NETWORK_MIN_PACKET_SAMPLE = 50;
@@ -23,7 +25,9 @@ export function createCallController({
     inputStream: null,
     callStartedAt: 0,
     statusTimer: null,
+    heartbeatTimer: null,
     recoveryTimer: null,
+    iceCheckingTimer: null,
     networkStatsTimer: null,
     networkStatsBusy: false,
     networkCounters: null,
@@ -34,6 +38,7 @@ export function createCallController({
     pendingNetworkSamples: 0,
     requestedPrebufferSeconds: null,
     appliedPrebufferSeconds: null,
+    localCandidateTypes: null,
     adaptiveBuffer: defaultAdaptiveBufferConfig(),
     reconnectAttempts: 0,
     isReconnecting: false,
@@ -47,6 +52,10 @@ export function createCallController({
     currentTranscript: "",
     currentAnswer: "",
     turnAnswers: new Map(),
+    conversationId: "",
+    remoteTerminated: false,
+    pendingTurn: false,
+    recoveryPendingText: "",
   };
 
   if (navigator.mediaDevices?.addEventListener) {
@@ -59,6 +68,10 @@ export function createCallController({
 
   async function startCall(options = {}) {
     try {
+      state.remoteTerminated = false;
+      if (options.conversationId) {
+        state.conversationId = options.conversationId;
+      }
       logger?.info("call start", { preserveConversation: Boolean(options.preserveConversation) });
       ui.setStatus("Connecting");
       ui.recordButton.disabled = true;
@@ -86,9 +99,21 @@ export function createCallController({
         logger?.info("events channel open");
         sendMicrophoneState();
         sendAdaptiveBuffer();
+        startHeartbeat();
         ui.setStatus(state.isMuted ? "Mic off" : "Listening");
+        if (state.recoveryPendingText) {
+          const text = state.recoveryPendingText;
+          state.recoveryPendingText = "";
+          state.eventsChannel.send(JSON.stringify({ type: "debug_text", text }));
+          logger?.info("pending turn restored after reconnect", { textLength: text.length });
+        }
       };
-      state.eventsChannel.onmessage = (event) => handleBridgeEvent(event.data, { state, ui, logger });
+      state.eventsChannel.onmessage = (event) => handleBridgeEvent(event.data, {
+        state,
+        ui,
+        logger,
+        onSessionTerminated: () => endCall("Session ended", { preserveSession: true }),
+      });
       state.eventsChannel.onerror = (event) => {
         logger?.error("events channel error", { type: event.type });
         ui.setStatus("Events error");
@@ -124,16 +149,29 @@ export function createCallController({
       logger?.info("local offer created", { sdpLength: offer.sdp?.length || 0 });
       await state.peerConnection.setLocalDescription(offer);
       logger?.info("local description set", { iceGatheringState: state.peerConnection.iceGatheringState });
-      await waitForIceGathering(state.peerConnection);
+      const iceGathering = await waitForIceGathering(state.peerConnection);
+      const candidateTypes = summarizeIceCandidates(state.peerConnection.localDescription?.sdp);
+      state.localCandidateTypes = candidateTypes;
       logger?.info("ice gathering wait complete", {
         iceGatheringState: state.peerConnection.iceGatheringState,
         localSdpLength: state.peerConnection.localDescription?.sdp?.length || 0,
+        elapsedMs: iceGathering.elapsedMs,
+        timedOut: iceGathering.timedOut,
+        candidateTypes,
       });
+      if ((rtcConfig.ice_servers?.length || 0) > 1 && !candidateTypes.relay) {
+        logger?.warn("TURN relay candidate missing from local offer", {
+          iceGatheringState: state.peerConnection.iceGatheringState,
+          elapsedMs: iceGathering.elapsedMs,
+          candidateTypes,
+        });
+      }
 
-      const answer = await auth.sendOffer(
-        state.peerConnection.localDescription,
-        getTtsOptions ? getTtsOptions() : {},
-      );
+      const answer = await auth.sendOffer(state.peerConnection.localDescription, {
+        ...(getTtsOptions ? getTtsOptions() : {}),
+        preserveConversation: Boolean(options.preserveConversation),
+        conversationId: state.conversationId,
+      });
       await state.peerConnection.setRemoteDescription({
         type: answer.type,
         sdp: answer.sdp,
@@ -145,10 +183,15 @@ export function createCallController({
       state.statusTimer = window.setInterval(updateCallDuration, 1000);
       startNetworkMonitor();
       ui.setStatus(state.isMuted ? "Mic off" : "Listening");
+      return true;
     } catch (error) {
       logger?.error("call start failed", errorDetails(error));
       ui.recordButton.disabled = false;
       await endCall(error.message || "Call failed");
+      if (options.autoRecover !== false) {
+        scheduleRecovery(CONNECTION_RECOVERY_MS, true);
+      }
+      return false;
     }
   }
 
@@ -175,7 +218,13 @@ export function createCallController({
     state.peerConnection.oniceconnectionstatechange = () => {
       const iceState = state.peerConnection?.iceConnectionState || "closed";
       logger?.info("ice connection state", { state: iceState });
+      if (iceState === "checking") {
+        startIceCheckingTimer();
+      } else if (["connected", "completed"].includes(iceState)) {
+        clearIceCheckingTimer();
+      }
       if (iceState === "failed" || iceState === "disconnected") {
+        clearIceCheckingTimer();
         scheduleRecovery();
       }
     };
@@ -196,15 +245,22 @@ export function createCallController({
     };
   }
 
-  async function endCall(statusText = "Ready") {
-    logger?.info("call end", { statusText });
+  async function endCall(statusText = "Ready", { preserveSession = false } = {}) {
+    logger?.info("call end", { statusText, preserveSession });
     clearRecoveryTimer();
+    clearIceCheckingTimer();
     clearStatusTimer();
+    clearHeartbeat();
     stopNetworkMonitor();
     setCallingState(false);
     state.isSpeaking = false;
     state.isMuted = false;
     state.connectionTonePlayed = false;
+    state.localCandidateTypes = null;
+
+    if (!preserveSession) {
+      await auth.closeSession();
+    }
 
     if (state.eventsChannel) {
       state.eventsChannel.close();
@@ -237,30 +293,48 @@ export function createCallController({
     }
     if (pcState === "connected") {
       clearRecoveryTimer();
+      const recovered = state.reconnectAttempts > 0;
       state.reconnectAttempts = 0;
       if (!state.connectionTonePlayed) {
         state.connectionTonePlayed = true;
         playTone("connected");
       }
-      ui.setStatus(state.isMuted ? "Mic off" : "Listening");
+      ui.setStatus(recovered ? "Recovered" : state.isMuted ? "Mic off" : "Listening");
+      if (recovered) {
+        window.setTimeout(() => {
+          if (state.isCalling) ui.setStatus(state.isMuted ? "Mic off" : "Listening");
+        }, 1500);
+      }
       startNetworkMonitor();
       return;
     }
     if (pcState === "disconnected") {
+      if (state.remoteTerminated) {
+        endCall("Session ended", { preserveSession: true });
+        return;
+      }
       ui.setNetworkQuality("offline", "WebRTC connection disconnected");
       playTone("disconnected");
       scheduleRecovery();
       return;
     }
     if (pcState === "failed") {
+      if (state.remoteTerminated) {
+        endCall("Session ended", { preserveSession: true });
+        return;
+      }
       ui.setNetworkQuality("offline", "WebRTC connection failed");
       playTone("disconnected");
       scheduleRecovery(0);
     }
   }
 
-  function scheduleRecovery(delayMs = CONNECTION_RECOVERY_MS) {
-    if (!state.isCalling || state.recoveryTimer) {
+  function scheduleRecovery(delayMs = CONNECTION_RECOVERY_MS, force = false) {
+    if (state.remoteTerminated) {
+      endCall("Session ended", { preserveSession: true });
+      return;
+    }
+    if ((!state.isCalling && !force) || state.recoveryTimer) {
       return;
     }
     ui.setStatus(delayMs ? "Connection unstable" : "Reconnecting");
@@ -271,20 +345,34 @@ export function createCallController({
     });
     state.recoveryTimer = window.setTimeout(async () => {
       state.recoveryTimer = null;
-      if (!state.isCalling) {
+      if (!state.isCalling && !force) {
         return;
       }
       if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        playTone("disconnected");
-        logger?.warn("connection recovery giving up");
-        await endCall("Connection lost");
-        onFallback?.("WebRTC failed; HTTPS fallback active.");
+        await activateRecoveryFallback();
         return;
       }
       state.reconnectAttempts += 1;
-      await endCall("Reconnecting");
-      await startCall({ preserveConversation: true });
+      if (state.pendingTurn && state.currentTranscript) {
+        state.recoveryPendingText = state.currentTranscript;
+      }
+      await endCall("Reconnecting", { preserveSession: true });
+      const started = await startCall({
+        preserveConversation: true,
+        conversationId: state.conversationId,
+        autoRecover: false,
+      });
+      if (!started) {
+        scheduleRecovery(CONNECTION_RECOVERY_MS, true);
+      }
     }, delayMs);
+  }
+
+  async function activateRecoveryFallback() {
+    playTone("disconnected");
+    logger?.warn("connection recovery giving up");
+    await endCall("Connection lost");
+    onFallback?.("WebRTC failed after retrying; HTTPS fallback active.");
   }
 
   function toggleMicrophone() {
@@ -323,6 +411,22 @@ export function createCallController({
     if (state.statusTimer) {
       window.clearInterval(state.statusTimer);
       state.statusTimer = null;
+    }
+  }
+
+  function startHeartbeat() {
+    clearHeartbeat();
+    state.heartbeatTimer = window.setInterval(() => {
+      if (state.eventsChannel?.readyState === "open") {
+        state.eventsChannel.send(JSON.stringify({ type: "heartbeat" }));
+      }
+    }, SESSION_HEARTBEAT_MS);
+  }
+
+  function clearHeartbeat() {
+    if (state.heartbeatTimer) {
+      window.clearInterval(state.heartbeatTimer);
+      state.heartbeatTimer = null;
     }
   }
 
@@ -466,6 +570,33 @@ export function createCallController({
     }
   }
 
+  function startIceCheckingTimer() {
+    if (state.iceCheckingTimer) {
+      return;
+    }
+    state.iceCheckingTimer = window.setTimeout(() => {
+      state.iceCheckingTimer = null;
+      if (!state.isCalling || state.peerConnection?.iceConnectionState !== "checking") {
+        return;
+      }
+      logger?.error("ICE checking timed out", {
+        timeoutMs: ICE_CHECK_TIMEOUT_MS,
+        candidateTypes: state.localCandidateTypes,
+      });
+      ui.setNetworkQuality("offline", "TURN relay is unreachable or no ICE path succeeded");
+      ui.setStatus("TURN unavailable");
+      playTone("disconnected");
+      scheduleRecovery(0);
+    }, ICE_CHECK_TIMEOUT_MS);
+  }
+
+  function clearIceCheckingTimer() {
+    if (state.iceCheckingTimer) {
+      window.clearTimeout(state.iceCheckingTimer);
+      state.iceCheckingTimer = null;
+    }
+  }
+
   function setCallingState(nextIsCalling) {
     state.isCalling = nextIsCalling;
     ui.setCallingState(nextIsCalling, { debugMode: Boolean(isDebugMode?.()) });
@@ -490,17 +621,21 @@ export function createCallController({
     listAudioInputs,
     switchAudioInput,
     sendDebugText,
+    restoreConversation(messages) {
+      resetConversationState();
+      ui.restoreConversation(messages);
+    },
   };
 
-  async function reconnect() {
+  async function reconnect({ preserveConversation = true } = {}) {
     if (!state.isCalling || state.isReconnecting) {
       return false;
     }
     state.isReconnecting = true;
-    logger?.info("manual reconnect start");
+    logger?.info("manual reconnect start", { preserveConversation });
     try {
-      await endCall("Reconnecting");
-      await startCall({ preserveConversation: true });
+      await endCall("Reconnecting", { preserveSession: true });
+      await startCall({ preserveConversation });
       logger?.info("manual reconnect complete", { connected: state.isCalling });
       return state.isCalling;
     } finally {
@@ -735,19 +870,40 @@ function errorDetails(error) {
   return { message: String(error) };
 }
 
-function waitForIceGathering(pc) {
+function waitForIceGathering(pc, timeoutMs = 10000) {
+  const startedAt = performance.now();
   if (pc.iceGatheringState === "complete") {
-    return Promise.resolve();
+    return Promise.resolve({ elapsedMs: 0, timedOut: false });
   }
   return new Promise((resolve) => {
-    const timeout = window.setTimeout(resolve, 2000);
+    let settled = false;
+    const finish = (timedOut) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve({
+        elapsedMs: Math.round(performance.now() - startedAt),
+        timedOut,
+      });
+    };
+    const timeout = window.setTimeout(() => finish(true), timeoutMs);
     pc.addEventListener("icegatheringstatechange", () => {
       if (pc.iceGatheringState === "complete") {
-        window.clearTimeout(timeout);
-        resolve();
+        finish(false);
       }
     });
   });
+}
+
+export function summarizeIceCandidates(sdp = "") {
+  const summary = { host: 0, srflx: 0, relay: 0, prflx: 0, total: 0 };
+  for (const match of String(sdp).matchAll(/^a=candidate:.*\styp\s(host|srflx|relay|prflx)(?:\s|$)/gm)) {
+    summary[match[1]] += 1;
+    summary.total += 1;
+  }
+  return summary;
 }
 
 function audioConstraints(deviceId = "") {

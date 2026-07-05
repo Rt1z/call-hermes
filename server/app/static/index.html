@@ -75,7 +75,12 @@
             <span id="recordIcon" aria-hidden="true"></span>
           </button>
           <button id="replayButton" class="mic-button" type="button" aria-label="Mute microphone" disabled>
-            <span aria-hidden="true"></span>
+            <svg class="mic-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+              <path d="M5 10v2a7 7 0 0 0 14 0v-2"></path>
+              <path d="M12 19v3"></path>
+              <path d="M8 22h8"></path>
+            </svg>
           </button>
         </div>
       </section>
@@ -90,13 +95,50 @@
           <input id="bridgeUrlInput" type="url" autocomplete="url" />
         </label>
         <label>
-          Shared Secret
+          Username
+          <input id="usernameInput" type="text" autocomplete="username" />
+        </label>
+        <label>
+          Password
           <input id="secretInput" type="password" autocomplete="current-password" />
         </label>
         <label>
           Voice
           <select id="ttsVoiceSelect"></select>
           <span id="ttsVoiceDescription" class="voice-description"></span>
+        </label>
+        <label>
+          Assistant preset
+          <select id="assistantPresetSelect">
+            <option value="concise">Concise voice assistant</option>
+            <option value="companion">Conversation companion</option>
+            <option value="expert">Detailed expert</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <label>
+          Hermes model
+          <input id="hermesModelInput" type="text" autocomplete="off" />
+        </label>
+        <label>
+          Response language
+          <select id="languageSelect">
+            <option value="auto">Automatic</option>
+            <option value="zh-CN">简体中文</option>
+            <option value="en-US">English</option>
+          </select>
+        </label>
+        <label>
+          System prompt
+          <textarea id="systemPromptInput" rows="4" maxlength="4000"></textarea>
+        </label>
+        <label>
+          Maximum response tokens
+          <input id="maxTokensInput" type="number" min="100" max="4096" step="100" />
+        </label>
+        <label>
+          Conversation memory
+          <input id="historyTurnsInput" type="number" min="1" max="100" step="1" />
         </label>
         <label>
           Playback Speed
@@ -117,6 +159,15 @@
           <input id="debugModeInput" type="checkbox" />
           Debug mode
         </label>
+        <button id="conversationHistoryButton" class="settings-command" type="button">Conversation history</button>
+        <button id="activeSessionsButton" class="settings-command" type="button">Active sessions</button>
+        <button id="accountButton" class="settings-command" type="button">Account</button>
+        <button id="installButton" class="settings-command" type="button" hidden>Install app</button>
+        <p id="platformCapability" class="platform-capability"></p>
+        <details class="quality-details">
+          <summary>Quality and latency</summary>
+          <div id="qualityMetrics" class="quality-metrics">No completed turns yet.</div>
+        </details>
         <details class="debug-details">
           <summary>Debug information</summary>
           <pre id="debugText" class="debug-text">No debug information.</pre>
@@ -135,6 +186,63 @@
         <div id="audioDeviceList" class="device-list" role="listbox" aria-label="Available microphones"></div>
         <menu>
           <button value="cancel" type="submit">Cancel</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="conversationDialog" class="conversation-dialog">
+      <form method="dialog" class="conversation-choice">
+        <h2>Conversation</h2>
+        <button id="resumeConversationButton" class="conversation-choice-button" type="submit" value="resume">
+          <span>Resume conversation</span>
+          <small>Keep the current Hermes context</small>
+        </button>
+        <button id="newConversationButton" class="conversation-choice-button" type="submit" value="new">
+          <span>New conversation</span>
+          <small>Start with a clean context</small>
+        </button>
+        <button class="conversation-cancel-button" type="submit" value="cancel">Cancel</button>
+      </form>
+    </dialog>
+
+    <dialog id="conversationHistoryDialog" class="conversation-history-dialog">
+      <section class="conversation-manager">
+        <div class="conversation-manager-header">
+          <h2>Conversation history</h2>
+          <button id="closeConversationHistoryButton" class="icon-button" type="button" aria-label="Close" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+          </button>
+        </div>
+        <input id="conversationSearchInput" type="search" placeholder="Search conversations" autocomplete="off" />
+        <div id="conversationList" class="conversation-list"></div>
+        <button id="loadMoreConversationsButton" class="settings-command" type="button" hidden>Load more</button>
+      </section>
+    </dialog>
+
+    <dialog id="activeSessionsDialog" class="conversation-history-dialog">
+      <section class="conversation-manager">
+        <div class="conversation-manager-header">
+          <h2>Devices and sessions</h2>
+          <button id="closeActiveSessionsButton" class="icon-button" type="button" aria-label="Close" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+          </button>
+        </div>
+        <p class="device-help">Browsers currently connected to this server.</p>
+        <div id="activeSessionList" class="conversation-list active-session-list"></div>
+        <h3>Authorized devices</h3>
+        <div id="authorizedDeviceList" class="conversation-list active-session-list"></div>
+      </section>
+    </dialog>
+
+    <dialog id="accountDialog">
+      <form id="accountForm" class="settings">
+        <h2>Account</h2>
+        <label>Current password<input id="currentPasswordInput" type="password" autocomplete="current-password" /></label>
+        <label>New password<input id="newPasswordInput" type="password" minlength="12" autocomplete="new-password" /></label>
+        <menu>
+          <button id="logoutButton" class="danger" type="button">Log out</button>
+          <button id="closeAccountButton" type="button">Cancel</button>
+          <button type="submit">Change password</button>
         </menu>
       </form>
     </dialog>

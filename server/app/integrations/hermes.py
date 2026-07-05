@@ -1,10 +1,12 @@
 from collections.abc import AsyncIterator
+import asyncio
 import json
 import logging
 
 import httpx
 
 from app.config import Settings
+from app.circuit_breaker import hermes_breaker
 
 logger = logging.getLogger("call_hermes.hermes")
 
@@ -40,40 +42,68 @@ class HermesClient:
         }
 
         timeout = httpx.Timeout(self._settings.hermes_timeout_seconds)
-        event_count = 0
-        content_chars = 0
-        finish_reason: str | None = None
-        received_done = False
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self._settings.hermes_base_url.rstrip('/')}/v1/chat/completions",
-                headers=headers,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    data = line.removeprefix("data: ").strip()
-                    if data == "[DONE]":
-                        received_done = True
-                        break
-                    event_count += 1
-                    text, event_finish_reason = _extract_openai_event(data)
-                    if event_finish_reason:
-                        finish_reason = event_finish_reason
-                    if text:
-                        content_chars += len(text)
-                        yield text
-        log = logger.warning if finish_reason == "length" else logger.info
-        log(
-            "Hermes stream ended events=%d chars=%d finish_reason=%s done=%s",
-            event_count,
-            content_chars,
-            finish_reason or "unknown",
-            received_done,
-        )
+        hermes_breaker.before_call()
+        try:
+            for attempt in range(1, self._settings.hermes_max_attempts + 1):
+                event_count = 0
+                content_chars = 0
+                finish_reason: str | None = None
+                received_done = False
+                emitted_content = False
+                try:
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        async with client.stream(
+                            "POST",
+                            f"{self._settings.hermes_base_url.rstrip('/')}/v1/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        ) as response:
+                            response.raise_for_status()
+                            async for line in response.aiter_lines():
+                                if not line or not line.startswith("data: "):
+                                    continue
+                                data = line.removeprefix("data: ").strip()
+                                if data == "[DONE]":
+                                    received_done = True
+                                    break
+                                event_count += 1
+                                text, event_finish_reason = _extract_openai_event(data)
+                                if event_finish_reason:
+                                    finish_reason = event_finish_reason
+                                if text:
+                                    emitted_content = True
+                                    content_chars += len(text)
+                                    yield text
+                    log = logger.warning if finish_reason == "length" else logger.info
+                    log(
+                        "Hermes stream ended events=%d chars=%d finish_reason=%s done=%s attempt=%d",
+                        event_count,
+                        content_chars,
+                        finish_reason or "unknown",
+                        received_done,
+                        attempt,
+                    )
+                    hermes_breaker.record_success()
+                    return
+                except Exception as exc:
+                    can_retry = (
+                        not emitted_content
+                        and attempt < self._settings.hermes_max_attempts
+                        and _retryable_error(exc)
+                    )
+                    if not can_retry:
+                        raise
+                    delay = self._settings.hermes_retry_backoff_seconds * attempt
+                    logger.warning(
+                        "Hermes stream attempt failed before first token attempt=%d retry_in=%.2fs error=%s",
+                        attempt,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+        except Exception:
+            hermes_breaker.record_failure()
+            raise
 
 
 def _build_chat_messages(
@@ -126,3 +156,11 @@ def _content_text(content: object) -> str:
         if isinstance(text, str):
             parts.append(text)
     return "".join(parts)
+
+
+def _retryable_error(exc: Exception) -> bool:
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in {429, 502, 503, 504}
+    return False

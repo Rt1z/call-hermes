@@ -12,9 +12,10 @@ if [ ! -d ".venv" ]; then
   python3.11 -m venv .venv
 fi
 
-source .venv/bin/activate
-pip install -q -e ".[dev]"
+./.venv/bin/pip install -q -e ".[dev]"
 
+# The log file remains owned by the invoking service user.
+# shellcheck disable=SC2024
 sudo -n setsid "${SERVER_DIR}/.venv/bin/uvicorn" app.main:app \
   --host 0.0.0.0 \
   --port 443 \

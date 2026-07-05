@@ -89,10 +89,14 @@ async def transcribe_pcm16(settings: Settings, pcm16: bytes) -> str:
         await asr.stop()
 
 
-async def ask_hermes(settings: Settings, user_text: str) -> str:
+async def ask_hermes(
+    settings: Settings,
+    user_text: str,
+    history: list[dict[str, str]] | None = None,
+) -> str:
     chunks: list[str] = []
     try:
-        async for chunk in HermesClient(settings).stream_chat(user_text):
+        async for chunk in HermesClient(settings).stream_chat(user_text, history=history):
             chunks.append(chunk)
     except Exception as exc:
         logger.exception("hermes chat failed")
@@ -114,7 +118,12 @@ async def synthesize_wav(settings: Settings, text: str) -> bytes:
     return pcm16_to_wav(b"".join(pcm_chunks), sample_rate=24000)
 
 
-async def voice_turn(settings: Settings, wav_path: str, trace: TurnTrace) -> tuple[str, str, bytes]:
+async def voice_turn(
+    settings: Settings,
+    wav_path: str,
+    trace: TurnTrace,
+    history: list[dict[str, str]] | None = None,
+) -> tuple[str, str, bytes]:
     logger.info(
         "turn_id=%s voice turn asr start wav=%s bytes=%d",
         trace.turn_id,
@@ -123,9 +132,9 @@ async def voice_turn(settings: Settings, wav_path: str, trace: TurnTrace) -> tup
     )
     with trace.stage("asr"):
         transcript = await transcribe_wav_file(settings, wav_path, trace)
-    logger.info("turn_id=%s voice turn asr complete transcript=%r", trace.turn_id, transcript[:120])
+    logger.info("turn_id=%s voice turn asr complete transcript_chars=%d", trace.turn_id, len(transcript))
     with trace.stage("hermes"):
-        answer = await ask_hermes(settings, transcript)
+        answer = await ask_hermes(settings, transcript, history=history)
     logger.info("turn_id=%s voice turn hermes complete answer_len=%d", trace.turn_id, len(answer))
     with trace.stage("tts"):
         audio_wav = await synthesize_wav(settings, answer)

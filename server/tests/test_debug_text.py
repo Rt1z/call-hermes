@@ -1,6 +1,6 @@
 import json
 
-from app.bridge.session import VoiceBridgeSession, _normalized_pcm16_rms
+from app.bridge.session import VoiceBridgeSession, _normalized_pcm16_rms, _text_similarity
 from app.config import Settings
 
 
@@ -91,3 +91,8 @@ def test_normalized_pcm16_rms() -> None:
     loud = (12000).to_bytes(2, "little", signed=True) * 10
     assert _normalized_pcm16_rms(silence) == 0
     assert 0.35 < _normalized_pcm16_rms(loud) < 0.38
+
+
+def test_echo_similarity_tolerates_minor_asr_differences() -> None:
+    assert _text_similarity("今天天气很好我们出去走走", "今天天气真好我们一起出去走走吧") > 0.6
+    assert _text_similarity("关闭提醒", "今天天气真好我们一起出去走走吧") < 0.3

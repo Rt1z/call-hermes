@@ -11,14 +11,19 @@ KEY_FILE="${KEY_FILE:-${ROOT_DIR}/ssl/privkey.pem}"
 LOG_FILE="${LOG_FILE:-${SERVER_DIR}/voice-bridge-https.log}"
 PID_FILE="${PID_FILE:-${SERVER_DIR}/voice-bridge-https.pid}"
 
+if command -v systemctl >/dev/null 2>&1 && systemctl cat call-hermes.service >/dev/null 2>&1; then
+  sudo systemctl restart call-hermes.service
+  echo "Started call-hermes.service via systemd"
+  exit 0
+fi
+
 cd "${SERVER_DIR}"
 
 if [ ! -d ".venv" ]; then
   "${PYTHON_BIN}" -m venv .venv
 fi
 
-source .venv/bin/activate
-pip install -q -e ".[dev]"
+./.venv/bin/pip install -q -e ".[dev]"
 
 setsid .venv/bin/uvicorn app.main:app \
   --host "${HOST}" \

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import ssl
 import sys
 import urllib.error
@@ -30,14 +31,20 @@ def main() -> int:
 
     root = Path(__file__).resolve().parents[1]
     env = read_env(root / "server/.env")
-    base_url = env.get("PUBLIC_BASE_URL", "https://127.0.0.1:10005").rstrip("/")
+    base_url = os.environ.get(
+        "BASE_URL", env.get("PUBLIC_BASE_URL", "https://127.0.0.1:10005")
+    ).rstrip("/")
     ctx = ssl._create_unverified_context()
 
     auth_body = json.dumps(
-        {"shared_secret": env["APP_SHARED_SECRET"], "device_name": "smoke"}
+        {
+            "username": env.get("BOOTSTRAP_ADMIN_USERNAME", "admin"),
+            "password": env["APP_SHARED_SECRET"],
+            "device_name": "smoke",
+        }
     ).encode()
     auth_req = urllib.request.Request(
-        f"{base_url}/auth/session",
+        f"{base_url}/auth/login",
         data=auth_body,
         headers={"Content-Type": "application/json"},
     )

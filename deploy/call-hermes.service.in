@@ -1,0 +1,27 @@
+[Unit]
+Description=Call Hermes voice bridge
+After=network-online.target coturn.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@ROOT@/server
+EnvironmentFile=@ROOT@/server/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@ROOT@/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 10005 --ssl-certfile @CERT@ --ssl-keyfile @KEY@
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+KillSignal=SIGINT
+UMask=0077
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@ROOT@/server/data @ROOT@/server/logs
+
+[Install]
+WantedBy=multi-user.target

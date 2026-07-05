@@ -1,0 +1,23 @@
+groups:
+  - name: call-hermes
+    rules:
+      - alert: CallHermesDown
+        expr: up{job="call-hermes"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Call Hermes is unavailable" }
+      - alert: CallHermesTurnErrors
+        expr: increase(call_hermes_turn_errors_total[10m]) > 3
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Call Hermes turn errors are elevated" }
+      - alert: CallHermesAudioUnderruns
+        expr: increase(call_hermes_audio_underruns_total[10m]) > 5
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Call Hermes audio underruns are elevated" }
+      - alert: CallHermesLatencyHigh
+        expr: call_hermes_turn_response_ms_last > 5000
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Call Hermes response latency exceeds five seconds" }

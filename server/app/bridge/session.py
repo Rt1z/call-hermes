@@ -3,10 +3,12 @@ import json
 import logging
 import math
 import time
+from contextlib import suppress
+from difflib import SequenceMatcher
 from uuid import uuid4
 from array import array
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 
@@ -28,17 +30,30 @@ class VoiceBridgeSession:
         session_id: str,
         settings: Settings,
         conversation_history: list[dict[str, str]] | None = None,
+        on_closed: Callable[["VoiceBridgeSession"], None] | None = None,
+        on_history_updated: Callable[[list[dict[str, str]]], None] | None = None,
+        on_metric: Callable[[str, float], None] | None = None,
+        device_name: str = "Unknown device",
+        device_id: str = "legacy",
+        user_id: str = "legacy",
     ) -> None:
         self.session_id = session_id
+        self.device_name = device_name
+        self.device_id = device_id
+        self.user_id = user_id
+        self.started_at = time.time()
         self.settings = settings
         self.pc = RTCPeerConnection(configuration=_rtc_configuration(settings))
         self.events = EventSink()
+        self._on_metric = on_metric
         self.output_track = QueueAudioTrack(
             prebuffer_seconds=settings.webrtc_audio_prebuffer_seconds,
             min_prebuffer_seconds=settings.webrtc_audio_prebuffer_min_seconds,
             max_prebuffer_seconds=settings.webrtc_audio_prebuffer_max_seconds,
             logger=logger,
             session_id=session_id,
+            on_underrun=lambda: self._metric("audio_underruns", 1),
+            rebuffer_step_seconds=settings.webrtc_rebuffer_step_seconds,
         )
         self.pc.addTrack(self.output_track)
         self._tasks: set[asyncio.Task[None]] = set()
@@ -51,11 +66,19 @@ class VoiceBridgeSession:
         self._trim_conversation_history()
         self._last_interrupt_at = 0.0
         self._assistant_echo_text = ""
+        self._playback_fingerprint: deque[tuple[float, float, float]] = deque(maxlen=300)
+        self._echo_playback_cursor = 0.0
+        self._input_echo_likelihood = 0.0
         self._client_muted = False
         self._barge_in_confirmed = False
+        self._on_closed = on_closed
+        self._on_history_updated = on_history_updated
+        self._closed = False
+        self._last_activity_at = time.monotonic()
 
         @self.pc.on("datachannel")
         def on_datachannel(channel) -> None:  # type: ignore[no-untyped-def]
+            self.touch()
             if channel.label == "events":
                 self.events.bind_channel(channel)
                 self.events.emit("listening", session_id=self.session_id)
@@ -65,6 +88,10 @@ class VoiceBridgeSession:
                     task = asyncio.create_task(self._handle_client_message(message))
                     self._tasks.add(task)
                     task.add_done_callback(self._tasks.discard)
+
+                @channel.on("close")
+                async def on_close() -> None:
+                    await self.close()
 
         @self.pc.on("track")
         def on_track(track) -> None:  # type: ignore[no-untyped-def]
@@ -86,10 +113,44 @@ class VoiceBridgeSession:
         return {"sdp": self.pc.localDescription.sdp, "type": self.pc.localDescription.type}
 
     async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         for task in list(self._tasks):
             task.cancel()
         await self.output_track.close_queue()
         await self.pc.close()
+        if self._on_closed:
+            self._on_closed(self)
+
+    async def terminate(self) -> None:
+        """Notify the browser before closing so it does not auto-reconnect."""
+        if self._closed:
+            return
+        self.events.emit("session_terminated")
+        await asyncio.sleep(0.1)
+        await self.close()
+
+    @property
+    def last_activity_at(self) -> float:
+        return self._last_activity_at
+
+    def touch(self) -> None:
+        self._last_activity_at = time.monotonic()
+
+    def summary(self, current_session_id: str) -> dict[str, object]:
+        return {
+            "session_id": self.session_id,
+            "device_name": self.device_name,
+            "state": self.pc.connectionState,
+            "started_at": self.started_at,
+            "idle_seconds": round(max(0, time.monotonic() - self._last_activity_at), 1),
+            "current": self.session_id == current_session_id,
+        }
+
+    def _metric(self, name: str, value: float) -> None:
+        if self._on_metric:
+            self._on_metric(name, value)
 
     @property
     def conversation_history(self) -> list[dict[str, str]]:
@@ -102,6 +163,7 @@ class VoiceBridgeSession:
         self.output_track.clear()
 
     async def _handle_client_message(self, message: object) -> None:
+        self.touch()
         if not isinstance(message, str):
             return
         try:
@@ -150,13 +212,25 @@ class VoiceBridgeSession:
         )
 
     async def submit_text(self, text: str) -> None:
-        if self._is_speaking.is_set():
-            self._interrupt_response()
         turn_id = uuid4().hex
         trace = TurnTrace(turn_id=turn_id, logger=logger)
         trace.mark("asr_final")
         self.events.emit("final_transcript", text=text, turn_id=turn_id)
-        task = asyncio.create_task(self._respond(text, trace, turn_id))
+        self._schedule_response(text, trace, turn_id)
+
+    def _schedule_response(self, text: str, trace: TurnTrace | None, turn_id: str) -> None:
+        previous = self._respond_task
+        if previous is not None and not previous.done():
+            previous.cancel()
+            self.output_track.clear()
+
+        async def respond_after_previous() -> None:
+            if previous is not None and previous is not asyncio.current_task():
+                with suppress(asyncio.CancelledError):
+                    await previous
+            await self._respond(text, trace, turn_id)
+
+        task = asyncio.create_task(respond_after_previous())
         self._respond_task = task
         self._respond_turn_id = turn_id
         self._tasks.add(task)
@@ -186,9 +260,9 @@ class VoiceBridgeSession:
             if not self._accept_input_while_speaking(text):
                 if transcript.is_final:
                     logger.info(
-                        "session_id=%s ignored unconfirmed barge-in final text=%r",
+                        "session_id=%s ignored unconfirmed barge-in final text_chars=%d",
                         self.session_id,
-                        text[:40],
+                        len(text),
                     )
                 return
             if self._active_input_turn_id is None:
@@ -209,11 +283,7 @@ class VoiceBridgeSession:
                     self._turn_trace.mark("asr_final")
                 trace = self._turn_trace
                 self._turn_trace = None
-                task = asyncio.create_task(self._respond(transcript.text, trace, turn_id))
-                self._respond_task = task
-                self._respond_turn_id = turn_id
-                self._tasks.add(task)
-                task.add_done_callback(self._tasks.discard)
+                self._schedule_response(transcript.text, trace, turn_id)
 
         def on_error(message: str) -> None:
             self.events.emit("error", source="asr", message=message)
@@ -241,6 +311,7 @@ class VoiceBridgeSession:
         try:
             while True:
                 frame = await track.recv()
+                self.touch()
                 if self._client_muted:
                     await stop_asr_if_needed("microphone_muted")
                     vad_preroll.clear()
@@ -256,6 +327,7 @@ class VoiceBridgeSession:
                 if auto_vad_enabled:
                     now = time.monotonic()
                     rms = _normalized_pcm16_rms(pcm)
+                    self._input_echo_likelihood = self._acoustic_echo_likelihood(rms)
                     vad_preroll.append(pcm)
                     vad_preroll_bytes += len(pcm)
                     while vad_preroll_bytes > vad_preroll_max_bytes and len(vad_preroll) > 1:
@@ -309,10 +381,9 @@ class VoiceBridgeSession:
             return False
         if self._looks_like_assistant_echo(text):
             logger.info(
-                "session_id=%s ignored assistant echo text_len=%d text=%r",
+                "session_id=%s ignored assistant echo text_len=%d",
                 self.session_id,
                 len(text),
-                text[:40],
             )
             return False
         now = time.monotonic()
@@ -329,11 +400,11 @@ class VoiceBridgeSession:
             return False
         self._barge_in_confirmed = True
         logger.info(
-            "session_id=%s barge-in confirmed text_len=%d text=%r",
+            "session_id=%s barge-in confirmed text_len=%d",
             self.session_id,
             len(text),
-            text[:40],
         )
+        self._metric("barge_ins", 1)
         self._interrupt_response()
         return True
 
@@ -343,7 +414,40 @@ class VoiceBridgeSession:
     def _looks_like_assistant_echo(self, text: str) -> bool:
         heard = _normalize_for_echo_match(text)
         spoken = _normalize_for_echo_match(self._assistant_echo_text)
-        return len(heard) >= self.settings.barge_in_min_chars and heard in spoken
+        if len(heard) < self.settings.barge_in_min_chars:
+            return False
+        if heard in spoken:
+            return True
+        similarity = _text_similarity(heard, spoken)
+        if similarity >= self.settings.barge_in_echo_similarity:
+            return True
+        return (
+            self._input_echo_likelihood >= 0.75
+            and similarity >= self.settings.barge_in_acoustic_echo_similarity
+        )
+
+    def _remember_playback_fingerprint(self, pcm24k: bytes) -> None:
+        now = time.monotonic()
+        start = max(self._echo_playback_cursor, now + self.output_track.prebuffer_seconds)
+        duration = len(pcm24k) / (24000 * 2)
+        end = start + duration
+        self._playback_fingerprint.append((start, end, _normalized_pcm16_rms(pcm24k)))
+        self._echo_playback_cursor = end
+
+    def _acoustic_echo_likelihood(self, input_rms: float) -> float:
+        now = time.monotonic()
+        while self._playback_fingerprint and self._playback_fingerprint[0][1] < now - 0.25:
+            self._playback_fingerprint.popleft()
+        candidates = [
+            rms for start, end, rms in self._playback_fingerprint if start - 0.2 <= now <= end + 0.2
+        ]
+        if not candidates or input_rms <= 0:
+            return 0.0
+        expected = max(candidates)
+        if expected <= 0:
+            return 0.0
+        ratio = min(input_rms, expected) / max(input_rms, expected)
+        return ratio
 
     async def _respond(self, user_text: str, trace: TurnTrace | None, turn_id: str) -> None:
         self._is_speaking.set()
@@ -356,6 +460,7 @@ class VoiceBridgeSession:
         tts_first_marked = False
         hermes_completed = False
         assistant_text = ""
+        history_committed = False
 
         async def hermes_chunks() -> AsyncIterator[str]:
             nonlocal assistant_text, hermes_completed, hermes_first_marked
@@ -413,9 +518,18 @@ class VoiceBridgeSession:
                     tts_first_marked = True
                 tts_chunks += 1
                 tts_bytes += len(pcm24k)
+                self._remember_playback_fingerprint(pcm24k)
                 await self.output_track.push_pcm16(pcm24k, sample_rate=24000)
             if hermes_completed and assistant_text.strip():
                 self._commit_conversation_turn(user_text, assistant_text)
+                history_committed = True
+            if not history_committed:
+                self._commit_conversation_turn(
+                    user_text,
+                    assistant_text if hermes_completed else "",
+                    count_completed=hermes_completed,
+                )
+                history_committed = True
             self.output_track.finish_utterance()
             logger.info(
                 "session_id=%s tts stream complete chunks=%d pcm24k_bytes=%d",
@@ -429,11 +543,27 @@ class VoiceBridgeSession:
                 trace.mark("speaking_end")
             self.events.emit("speaking", state="end", turn_id=turn_id)
         except asyncio.CancelledError:
+            if not history_committed:
+                self._commit_conversation_turn(
+                    user_text,
+                    assistant_text,
+                    count_completed=False,
+                )
+                history_committed = True
             self.output_track.clear()
             self.events.emit("speaking", state="interrupted", turn_id=turn_id)
+            self._metric("turns_interrupted", 1)
         except Exception as exc:  # noqa: BLE001
+            if not history_committed:
+                self._commit_conversation_turn(
+                    user_text,
+                    assistant_text,
+                    count_completed=False,
+                )
+                history_committed = True
             self.output_track.clear()
             self.events.emit("error", source="tts", message=str(exc))
+            self._metric("turn_errors", 1)
         finally:
             if self._respond_task is asyncio.current_task():
                 self._is_speaking.clear()
@@ -443,25 +573,42 @@ class VoiceBridgeSession:
             if self._turn_trace is trace:
                 self._turn_trace = None
             if trace is not None:
+                for metric_name, from_mark, to_mark in (
+                    ("hermes_ttft_ms", "asr_final", "hermes_first_token"),
+                    ("tts_ttfa_ms", "hermes_first_token", "tts_first_audio"),
+                    ("turn_response_ms", "asr_final", "speaking_end"),
+                ):
+                    value = trace.gap(from_mark, to_mark)
+                    if value is not None:
+                        self._metric(metric_name, value)
                 logger.info(
-                    "session_id=%s p2p turn complete transcript=%r hermes_ttft=%sms tts_ttfa=%sms "
+                    "session_id=%s p2p turn complete transcript_chars=%d hermes_ttft=%sms tts_ttfa=%sms "
                     "respond_total=%sms summary=%s",
                     self.session_id,
-                    user_text[:80],
+                    len(user_text),
                     trace.gap("asr_final", "hermes_first_token"),
                     trace.gap("hermes_first_token", "tts_first_audio"),
                     trace.gap("asr_final", "speaking_end"),
                     trace.summary(),
                 )
+                self.events.emit("turn_metrics", turn_id=turn_id, metrics=trace.summary())
 
-    def _commit_conversation_turn(self, user_text: str, assistant_text: str) -> None:
-        self._conversation_history.extend(
-            [
-                {"role": "user", "content": user_text.strip()},
-                {"role": "assistant", "content": assistant_text.strip()},
-            ]
-        )
+    def _commit_conversation_turn(
+        self,
+        user_text: str,
+        assistant_text: str = "",
+        *,
+        count_completed: bool = True,
+    ) -> None:
+        messages = [{"role": "user", "content": user_text.strip()}]
+        if assistant_text.strip():
+            messages.append({"role": "assistant", "content": assistant_text.strip()})
+        self._conversation_history.extend(messages)
         self._trim_conversation_history()
+        if self._on_history_updated:
+            self._on_history_updated(self.conversation_history)
+        if count_completed:
+            self._metric("turns_completed", 1)
         logger.info(
             "session_id=%s conversation committed messages=%d chars=%d",
             self.session_id,
@@ -472,13 +619,15 @@ class VoiceBridgeSession:
     def _trim_conversation_history(self) -> None:
         max_messages = self.settings.hermes_history_max_turns * 2
         while len(self._conversation_history) > max_messages:
-            del self._conversation_history[:2]
+            del self._conversation_history[0]
         while (
-            len(self._conversation_history) > 2
+            len(self._conversation_history) > 1
             and sum(len(message.get("content", "")) for message in self._conversation_history)
             > self.settings.hermes_history_max_chars
         ):
-            del self._conversation_history[:2]
+            del self._conversation_history[0]
+        while self._conversation_history and self._conversation_history[0]["role"] == "assistant":
+            del self._conversation_history[0]
 
 
 def _should_flush(text: str) -> bool:
@@ -489,6 +638,18 @@ def _should_flush(text: str) -> bool:
 
 def _normalize_for_echo_match(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _text_similarity(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    width = 2 if min(len(left), len(right)) >= 4 else 1
+    left_parts = {left[index : index + width] for index in range(len(left) - width + 1)}
+    right_parts = {right[index : index + width] for index in range(len(right) - width + 1)}
+    if not left_parts or not right_parts:
+        return 0.0
+    jaccard = len(left_parts & right_parts) / len(left_parts | right_parts)
+    return max(jaccard, SequenceMatcher(None, left, right).ratio())
 
 
 def _normalized_pcm16_rms(pcm: bytes) -> float:

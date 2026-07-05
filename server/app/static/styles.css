@@ -23,6 +23,24 @@ body {
   min-height: 100%;
 }
 
+.offline-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.offline-page main {
+  display: grid;
+  gap: 20px;
+  text-align: center;
+}
+
+.platform-capability {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 body {
   margin: 0;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -437,7 +455,8 @@ body[data-status="error"] .status-dot {
 }
 
 .calling .transcript {
-  padding-bottom: 132px;
+  padding-bottom: max(210px, calc(170px + env(safe-area-inset-bottom)));
+  scroll-padding-bottom: max(210px, calc(170px + env(safe-area-inset-bottom)));
 }
 
 .debug-mode .transcript {
@@ -714,45 +733,22 @@ body[data-status="error"] .status-dot {
   color: var(--green);
 }
 
-.mic-button span {
-  position: relative;
-  width: 28px;
-  height: 40px;
-  border: 4px solid currentColor;
-  border-radius: 16px;
-  transform: translateY(-8px);
-}
-
-.mic-button span::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -18px;
-  width: 4px;
-  height: 14px;
-  border-radius: 999px;
-  background: currentColor;
-  transform: translateX(-50%);
-}
-
-.mic-button span::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -20px;
-  width: 34px;
-  height: 18px;
-  border: 4px solid currentColor;
-  border-top: 0;
-  border-radius: 0 0 18px 18px;
-  transform: translateX(-50%);
+.mic-button-icon {
+  width: 42px;
+  height: 42px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .mic-button:disabled {
   opacity: 0.35;
 }
 
-.mic-button:disabled span {
+.mic-button:disabled .mic-button-icon {
   color: var(--muted);
 }
 
@@ -802,6 +798,214 @@ dialog::backdrop {
   overscroll-behavior: contain;
 }
 
+.conversation-choice {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+}
+
+.conversation-choice h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+.conversation-choice-button {
+  min-height: 68px;
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+}
+
+.conversation-choice-button:focus-visible {
+  border-color: var(--blue);
+  outline: 2px solid color-mix(in srgb, var(--blue) 36%, transparent);
+  outline-offset: 1px;
+}
+
+.conversation-choice-button small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.conversation-cancel-button {
+  min-height: 42px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.settings-command {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.conversation-manager {
+  display: grid;
+  gap: 14px;
+  max-height: min(calc(100dvh - 36px), 720px);
+  padding: 20px;
+}
+
+.conversation-manager-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.conversation-manager-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.conversation-manager input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.conversation-list {
+  min-height: 120px;
+  display: grid;
+  align-content: start;
+  overflow-y: auto;
+}
+
+.active-session-list {
+  gap: 8px;
+}
+
+.active-session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.active-session-item div {
+  min-width: 0;
+}
+
+.active-session-item strong,
+.active-session-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-session-item small {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.active-session-item button {
+  flex: none;
+}
+
+.quality-details {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.quality-metrics {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.quality-metrics div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.quality-metrics strong {
+  color: var(--text);
+}
+
+.conversation-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(4, 36px);
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.conversation-item[data-current="true"] {
+  box-shadow: inset 3px 0 var(--blue);
+}
+
+.conversation-open {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.conversation-open span,
+.conversation-open small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-open small,
+.conversation-empty {
+  color: var(--muted);
+}
+
+.conversation-action {
+  width: 36px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.conversation-action.favorite {
+  color: var(--amber);
+}
+
+.conversation-action.favorite svg {
+  fill: currentColor;
+}
+
+.conversation-action svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.conversation-action.danger {
+  color: var(--red);
+}
+
 .focus-target {
   position: absolute;
   width: 1px;
@@ -820,7 +1024,8 @@ dialog::backdrop {
 }
 
 .settings input,
-.settings select {
+.settings select,
+.settings textarea {
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--line);
@@ -828,6 +1033,12 @@ dialog::backdrop {
   padding: 0 12px;
   background: var(--panel-2);
   color: var(--text);
+}
+
+.settings textarea {
+  min-height: 96px;
+  padding: 10px 12px;
+  resize: vertical;
 }
 
 .settings select {
@@ -1002,6 +1213,7 @@ summary:focus-visible {
   .calling .transcript,
   .debug-mode .transcript {
     padding-bottom: 0;
+    scroll-padding-bottom: 0;
   }
 
   .transcript-panel {

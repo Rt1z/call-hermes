@@ -4,8 +4,8 @@ from pathlib import Path
 
 
 def configure_logging() -> None:
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    log_dir = Path(__file__).resolve().parents[1] / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "voice-bridge.log"
 
     formatter = logging.Formatter(
