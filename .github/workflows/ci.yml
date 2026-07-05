@@ -57,10 +57,15 @@ jobs:
           USE_MOCK_TTS: "true"
         run: |
           HOST_IP=$(hostname -I | awk '{print $1}')
-          echo "BASE_URL=http://${HOST_IP}:10005" >> "$GITHUB_ENV"
-          PUBLIC_BASE_URL="http://${HOST_IP}:10005" \
-            uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 10005 > /tmp/call-hermes.log 2>&1 &
-      - run: curl --retry 20 --retry-delay 1 --retry-connrefused http://127.0.0.1:10005/live
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout /tmp/call-hermes-ci.key -out /tmp/call-hermes-ci.crt \
+            -subj "/CN=${HOST_IP}" -addext "subjectAltName=IP:${HOST_IP}"
+          echo "BASE_URL=https://${HOST_IP}:10005" >> "$GITHUB_ENV"
+          PUBLIC_BASE_URL="https://${HOST_IP}:10005" \
+            uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 10005 \
+              --ssl-keyfile /tmp/call-hermes-ci.key --ssl-certfile /tmp/call-hermes-ci.crt \
+              > /tmp/call-hermes.log 2>&1 &
+      - run: curl -k --retry 20 --retry-delay 1 --retry-connrefused https://127.0.0.1:10005/live
       - name: Run browser WebRTC smoke
         env:
           APP_SHARED_SECRET: ci-shared-secret-32-characters-long
