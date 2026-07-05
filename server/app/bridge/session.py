@@ -24,6 +24,55 @@ from app.pwa.trace import TurnTrace
 logger = logging.getLogger("call_hermes.bridge")
 
 
+class _UtteranceBuffer:
+    def __init__(self) -> None:
+        self._final_segments: list[str] = []
+        self._partial = ""
+
+    def update(self, text: str, is_final: bool) -> str:
+        text = text.strip()
+        if not text:
+            return self.text
+        if is_final:
+            self._add_final(text)
+            self._partial = ""
+        else:
+            self._partial = text
+        return self.text
+
+    @property
+    def text(self) -> str:
+        parts = [*self._final_segments]
+        if self._partial and (not parts or self._partial != parts[-1]):
+            parts.append(self._partial)
+        return _join_transcript_segments(parts)
+
+    @property
+    def final_segment_count(self) -> int:
+        return len(self._final_segments)
+
+    def consume(self) -> str:
+        text = self.text
+        self._final_segments.clear()
+        self._partial = ""
+        return text
+
+    def _add_final(self, text: str) -> None:
+        if not self._final_segments:
+            self._final_segments.append(text)
+            return
+        current = _join_transcript_segments(self._final_segments)
+        if text == self._final_segments[-1] or current.endswith(text):
+            return
+        if text.startswith(current):
+            self._final_segments[:] = [text]
+            return
+        if text.startswith(self._final_segments[-1]):
+            self._final_segments[-1] = text
+            return
+        self._final_segments.append(text)
+
+
 class VoiceBridgeSession:
     def __init__(
         self,
@@ -254,6 +303,7 @@ class VoiceBridgeSession:
         vad_preroll: deque[bytes] = deque()
         vad_preroll_bytes = 0
         vad_preroll_max_bytes = 16000 * 2 * self.settings.auto_vad_preroll_ms // 1000
+        utterance = _UtteranceBuffer()
 
         def on_transcript(transcript: Transcript) -> None:
             text = transcript.text.strip()
@@ -271,19 +321,42 @@ class VoiceBridgeSession:
             if self._turn_trace is None:
                 self._turn_trace = TurnTrace(turn_id=turn_id, logger=logger)
                 self._turn_trace.mark("asr_first_partial")
-            self.events.emit(
-                "final_transcript" if transcript.is_final else "partial_transcript",
-                text=transcript.text,
-                turn_id=turn_id,
-            )
+            combined_text = utterance.update(text, transcript.is_final)
+            self.events.emit("partial_transcript", text=combined_text, turn_id=turn_id)
             if transcript.is_final:
-                self._barge_in_confirmed = False
-                self._active_input_turn_id = None
-                if self._turn_trace is not None:
-                    self._turn_trace.mark("asr_final")
-                trace = self._turn_trace
-                self._turn_trace = None
-                self._schedule_response(transcript.text, trace, turn_id)
+                logger.info(
+                    "session_id=%s asr segment buffered segments=%d text_chars=%d waiting_vad_ms=%d",
+                    self.session_id,
+                    utterance.final_segment_count,
+                    len(combined_text),
+                    self.settings.auto_vad_silence_ms,
+                )
+                self.events.emit(
+                    "vad_state",
+                    state="holding",
+                    silence_ms=self.settings.auto_vad_silence_ms,
+                )
+
+        def finalize_utterance(reason: str) -> None:
+            text = utterance.consume().strip()
+            turn_id = self._active_input_turn_id
+            if not text or turn_id is None:
+                return
+            self._barge_in_confirmed = False
+            self._active_input_turn_id = None
+            if self._turn_trace is not None:
+                self._turn_trace.mark("asr_final")
+            trace = self._turn_trace
+            self._turn_trace = None
+            logger.info(
+                "session_id=%s utterance finalized reason=%s text_chars=%d silence_ms=%d",
+                self.session_id,
+                reason,
+                len(text),
+                self.settings.auto_vad_silence_ms,
+            )
+            self.events.emit("final_transcript", text=text, turn_id=turn_id)
+            self._schedule_response(text, trace, turn_id)
 
         def on_error(message: str) -> None:
             self.events.emit("error", source="asr", message=message)
@@ -304,9 +377,12 @@ class VoiceBridgeSession:
             if asr is None:
                 return
             await asr.stop()
+            await asyncio.sleep(0)
             asr = None
             logger.info("session_id=%s asr stream stopped reason=%s", self.session_id, reason)
             self.events.emit("asr_state", state="stopped", reason=reason)
+            if reason in {"vad_silence", "microphone_muted"}:
+                finalize_utterance(reason)
 
         try:
             while True:
@@ -634,6 +710,17 @@ def _should_flush(text: str) -> bool:
     if len(text) >= 24:
         return True
     return any(text.endswith(mark) for mark in ("。", "！", "？", ".", "!", "?", "\n"))
+
+
+def _join_transcript_segments(segments: list[str]) -> str:
+    result = ""
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+        separator = " " if result and result[-1].isalnum() and segment[0].isalnum() else ""
+        result = f"{result}{separator}{segment}"
+    return result
 
 
 def _normalize_for_echo_match(text: str) -> str:

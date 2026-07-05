@@ -114,6 +114,9 @@ export function handleBridgeEvent(raw, context) {
     } else if (event.state === "silence") {
       ui.setDebug("VAD silence; ASR paused");
       ui.setVoiceActive(false);
+    } else if (event.state === "holding") {
+      const seconds = Number(event.silence_ms) / 1000;
+      ui.setDebug(`ASR segment buffered; waiting for ${seconds.toFixed(1)}s VAD pause`);
     } else if (event.state === "muted") {
       ui.setDebug("VAD muted; ASR paused");
       ui.setVoiceActive(false);

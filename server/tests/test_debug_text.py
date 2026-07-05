@@ -1,6 +1,11 @@
 import json
 
-from app.bridge.session import VoiceBridgeSession, _normalized_pcm16_rms, _text_similarity
+from app.bridge.session import (
+    VoiceBridgeSession,
+    _UtteranceBuffer,
+    _normalized_pcm16_rms,
+    _text_similarity,
+)
 from app.config import Settings
 
 
@@ -96,3 +101,23 @@ def test_normalized_pcm16_rms() -> None:
 def test_echo_similarity_tolerates_minor_asr_differences() -> None:
     assert _text_similarity("今天天气很好我们出去走走", "今天天气真好我们一起出去走走吧") > 0.6
     assert _text_similarity("关闭提醒", "今天天气真好我们一起出去走走吧") < 0.3
+
+
+def test_utterance_buffer_holds_and_combines_asr_sentence_ends() -> None:
+    utterance = _UtteranceBuffer()
+
+    assert utterance.update("我觉得第一个问题是承担比较低", True) == "我觉得第一个问题是承担比较低"
+    assert utterance.update("第二个问题是团队士气比较差", True) == (
+        "我觉得第一个问题是承担比较低 第二个问题是团队士气比较差"
+    )
+    assert utterance.final_segment_count == 2
+    assert utterance.consume() == "我觉得第一个问题是承担比较低 第二个问题是团队士气比较差"
+    assert utterance.text == ""
+
+
+def test_utterance_buffer_replaces_cumulative_asr_results() -> None:
+    utterance = _UtteranceBuffer()
+
+    utterance.update("hello", True)
+    assert utterance.update("hello world", True) == "hello world"
+    assert utterance.update("next thought", False) == "hello world next thought"
