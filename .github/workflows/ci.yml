@@ -52,16 +52,18 @@ jobs:
         env:
           APP_SHARED_SECRET: ci-shared-secret-32-characters-long
           JWT_SECRET: ci-jwt-secret-value-32-characters
-          PUBLIC_BASE_URL: http://127.0.0.1:10005
           CONVERSATION_DATABASE_PATH: /tmp/call-hermes-ci.sqlite3
           USE_MOCK_ASR: "true"
           USE_MOCK_TTS: "true"
-        run: uvicorn app.main:app --app-dir server --host 127.0.0.1 --port 10005 > /tmp/call-hermes.log 2>&1 &
+        run: |
+          HOST_IP=$(hostname -I | awk '{print $1}')
+          echo "BASE_URL=http://${HOST_IP}:10005" >> "$GITHUB_ENV"
+          PUBLIC_BASE_URL="http://${HOST_IP}:10005" \
+            uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 10005 > /tmp/call-hermes.log 2>&1 &
       - run: curl --retry 20 --retry-delay 1 --retry-connrefused http://127.0.0.1:10005/live
       - name: Run browser WebRTC smoke
         env:
           APP_SHARED_SECRET: ci-shared-secret-32-characters-long
-          BASE_URL: http://127.0.0.1:10005
           BROWSER: ${{ matrix.browser }}
         run: python scripts/e2e_browser_smoke.py
       - name: Show voice bridge log on failure
