@@ -12,7 +12,12 @@ SELECTED_BROWSER = os.environ.get("BROWSER", "").strip().lower()
 
 
 async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
-    browser = await engine.launch(headless=True)
+    launch_options: dict[str, object] = {"headless": True}
+    if name == "firefox":
+        launch_options["firefox_user_prefs"] = {
+            "media.peerconnection.ice.obfuscate_host_addresses": False,
+        }
+    browser = await engine.launch(**launch_options)
     try:
         context = await browser.new_context(ignore_https_errors=True, service_workers="block")
         page = await context.new_page()
