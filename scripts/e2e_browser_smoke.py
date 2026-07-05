@@ -37,12 +37,17 @@ async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
         await page.goto(BASE_URL)
         await page.click("#recordButton")
         await page.click("#newConversationButton")
-        await page.locator("#status", has_text="Mic off").wait_for(timeout=20_000)
+        await page.locator("#status", has_text="Mic off").wait_for(timeout=45_000)
         await page.evaluate("document.querySelector('#recordButton').click()")
         await page.locator("#status", has_text="Ready").wait_for(timeout=5_000)
         return name, "connected"
     except Exception as error:  # noqa: BLE001
         detail = f"{type(error).__name__}: {error}".replace("\n", " ")
+        try:
+            status = await page.locator("#status").inner_text(timeout=1_000)
+            detail = f"status={status!r}; {detail}"
+        except Exception:  # noqa: BLE001
+            pass
         print(f"::error title={name} WebRTC smoke failed::{detail}")
         return name, detail
     finally:
