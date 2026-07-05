@@ -1,6 +1,6 @@
 # Call Hermes
 
-Call Hermes 是一个面向现代桌面与移动浏览器的实时语音对话 PWA。浏览器通过 WebRTC 将麦克风音频发送到 FastAPI 服务，服务端使用阿里云百炼完成实时语音识别和语音合成，并通过兼容 OpenAI Chat Completions 的 Hermes API 生成回复。项目重点适配和测试 iPhone Safari，同时也支持 PC 端 Chrome、Edge 以及 Android Chrome。
+Call Hermes 是一个面向现代桌面与移动浏览器的实时语音对话 PWA。浏览器通过 WebRTC 将麦克风音频发送到 FastAPI 服务，服务端使用阿里云百炼完成实时语音识别和语音合成，并通过兼容 OpenAI Chat Completions 的 Hermes API 生成回复。项目重点适配 iPhone Safari，同时支持 Android Chrome 以及 PC 端 Chrome、Edge、Firefox 和 Safari。
 
 ## 界面预览
 
@@ -8,22 +8,20 @@ Call Hermes 是一个面向现代桌面与移动浏览器的实时语音对话 P
   <img src="docs/images/pwa-conversation.gif" alt="Call Hermes PWA 实时语音对话演示" width="300">
 </p>
 
-## 功能
+## 亮点功能
 
-- WebRTC 双向实时音频传输
-- 阿里云百炼 `fun-asr-realtime` 实时语音识别
-- Hermes 流式文本回复
-- 多轮对话历史与 Hermes 上下文，重连后继续当前会话
-- 阿里云百炼 `qwen3-tts-flash-realtime` 流式语音合成
-- 服务端 VAD 自动断句，无需再次点击麦克风提交
-- 播放期间支持说话打断
-- 可关闭麦克风，并暂停向服务端发送音频
-- 支持选择浏览器暴露的本机或蓝牙麦克风
-- 支持选择 TTS 音色和调节播放速度
-- 提供文字 Debug 模式和前端诊断日志
-- WebRTC 失败时提供 HTTPS 录音降级通道
-- 支持 STUN/TURN，适用于移动网络和受限 NAT 环境
-- 实时显示 WebRTC 网络质量，并根据 RTT、jitter 和丢包率自动调整 TTS 音频预缓冲
+- **端到端全流式对话**：WebRTC 实时上传麦克风音频，百炼实时 ASR 持续转写，Hermes 流式生成文本，再由百炼实时 TTS 分段合成并回传播放，减少等待完整回复的延迟。
+- **免按键自然交互**：服务端 VAD 自动判断说话开始和结束，无需再次点击提交；预录音缓冲可保留开口前的音频，降低漏掉第一个字的概率。
+- **可靠的语音打断**：播放回复时可以直接说话打断，系统会停止当前生成与播放，并将已识别的打断内容可靠写入下一轮 Hermes 上下文。
+- **自适应流畅播放**：根据 WebRTC 的 RTT、jitter、丢包率和播放欠载动态调整音频预缓冲；网络波动时自动重新缓冲，兼顾首包速度与连续性。
+- **完整多轮对话历史**：对话及上下文持久化到 SQLite，刷新页面、重连或服务重启后仍可恢复；支持搜索、重命名、收藏、切换、导出和删除会话。
+- **多设备与跨平台 PWA**：适配 iPhone、iPad、Android、Windows、macOS 和 Linux，可选择浏览器公开的本机或蓝牙麦克风，并可安装到主屏幕或桌面。
+- **个性化语音与模型**：可选择男女 TTS 音色、调节播放速度，并配置系统提示词、Hermes 模型、识别语言、上下文长度和最大输出 token。
+- **弱网与连接恢复**：支持 STUN/TURN 穿透移动网络和受限 NAT；WebRTC 失败时可使用 HTTPS 录音降级通道，并支持自动重连和待处理消息恢复。
+- **安全的账号与设备会话**：使用账号密码登录、短期访问 JWT 和 HttpOnly 刷新 Cookie；支持刷新令牌轮换、设备撤销、登录限流与审计，第三方密钥始终只保存在服务端。
+- **内置诊断与可观测性**：设置页提供文字 Debug、设备和前端诊断信息；服务端提供结构化日志、健康检查、Prometheus 指标、Grafana 仪表盘及延迟趋势数据。
+- **面向长期运行的运维能力**：提供 systemd 自动重启、SQLite 在线备份、证书与磁盘巡检、容量限制、空闲会话清理和依赖熔断。
+- **自动化质量保障**：覆盖后端、前端鉴权、网络恢复、真实供应商链路和多浏览器冒烟测试，并集成 Ruff、Bandit、依赖审计与 ShellCheck。
 
 ## 数据流程
 
@@ -38,7 +36,7 @@ PC、Android 或 iPhone 浏览器/PWA
   -> 当前设备播放
 ```
 
-API Key、Hermes 凭据和 TURN 密码只保存在服务器上，不会下发到 PWA。PWA 使用共享密钥换取短期 JWT，再建立 WebRTC 会话。
+API Key、Hermes 凭据和 TURN 密码只保存在服务器上，不会下发到 PWA。PWA 登录后使用保存在内存中的短期访问 JWT 建立 WebRTC 会话，并通过 HttpOnly Cookie 安全续期。
 
 ## 目录结构
 
@@ -66,8 +64,8 @@ ssl/                    本地 TLS 证书目录，不纳入 Git
 
 - iPhone/iPad Safari：重点适配平台，可安装到主屏幕；后台运行、锁屏和输出路由受 iOS 限制。
 - Android Chrome：支持 WebRTC、麦克风和 PWA 安装；不同厂商的蓝牙音频行为可能存在差异。
-- Windows、macOS、Linux：推荐使用最新版 Chrome 或 Edge，支持主要通话、设置和 Debug 功能。
-- 其他现代浏览器：具备 WebRTC、MediaDevices 和安全上下文时原则上可用，但尚未全部完成系统性验证。
+- Windows、macOS、Linux：支持最新版 Chrome、Edge、Firefox 和 Safari，具备主要通话、设置和 Debug 功能。
+- 其他现代浏览器：具备 WebRTC、MediaDevices 和安全上下文时原则上可用，具体音频设备能力取决于浏览器实现。
 
 ## 安装
 
@@ -234,9 +232,10 @@ TURN_PORT=10004 ./scripts/run_turn.sh
 ./scripts/check_config.sh
 ```
 
-`GET /live` 是不访问外部依赖的存活探针；`GET /ready` 和 `GET /health` 会报告 Hermes、ASR、
-TTS、TURN、TLS 证书、自适应缓冲、容量和活动会话状态。Hermes 健康结果默认缓存 5 秒，避免探针
-放大依赖压力。`GET /metrics` 提供会话、播放欠载、打断、Hermes 首 token、TTS 首音频和整轮响应指标。
+`GET /live` 是不访问外部依赖的存活探针；公开的 `GET /ready` 和 `GET /health` 仅返回适合探针使用的
+概要状态，登录后可通过 `GET /health/details` 查看 Hermes、ASR、TTS、TURN、TLS 证书、自适应缓冲、
+容量和活动会话详情。Hermes 健康结果默认缓存 5 秒，避免探针放大依赖压力。`GET /metrics` 提供会话、
+播放欠载、打断、Hermes 首 token、TTS 首音频和整轮响应指标。
 浏览器诊断日志位于设置页面底部，服务端完整日志位于 `server/logs/voice-bridge.log`。
 
 常见端口：
