@@ -552,7 +552,7 @@ class VoiceBridgeSession:
                     self._remember_assistant_text(chunk)
                     assistant_text += chunk
                     self.events.emit("answer_delta", text=chunk, turn_id=turn_id)
-                    buffer += chunk
+                    buffer += chunk.lstrip() if not buffer else chunk
                     if _should_flush(buffer):
                         normalized = normalizer.feed(buffer) + normalizer.flush()
                         yield (normalized or buffer)

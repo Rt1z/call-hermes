@@ -15,6 +15,23 @@ def _settings(**updates: object) -> Settings:
     )
 
 
+class _FakeOutputTrack:
+    async def push_pcm16(self, pcm: bytes, sample_rate: int) -> None:
+        pass
+
+    def finish_utterance(self) -> None:
+        pass
+
+    async def wait_until_idle(self) -> None:
+        pass
+
+    def clear(self) -> None:
+        pass
+
+    async def close_queue(self) -> None:
+        pass
+
+
 def test_chat_messages_include_system_history_and_current_user() -> None:
     settings = _settings(hermes_system_prompt="voice prompt")
     history = [
@@ -91,26 +108,10 @@ async def test_second_response_receives_first_completed_turn(monkeypatch) -> Non
             if False:
                 yield b""
 
-    class FakeOutputTrack:
-        async def push_pcm16(self, pcm: bytes, sample_rate: int) -> None:
-            pass
-
-        def finish_utterance(self) -> None:
-            pass
-
-        async def wait_until_idle(self) -> None:
-            pass
-
-        def clear(self) -> None:
-            pass
-
-        async def close_queue(self) -> None:
-            pass
-
     monkeypatch.setattr(session_module, "HermesClient", FakeHermesClient)
     monkeypatch.setattr(session_module, "create_tts_session", lambda _settings: FakeTTS())
     session = VoiceBridgeSession("test-session", _settings())
-    session.output_track = FakeOutputTrack()  # type: ignore[assignment]
+    session.output_track = _FakeOutputTrack()  # type: ignore[assignment]
 
     await session._respond("first", None, "turn-1")
     await session._respond("second", None, "turn-2")
@@ -158,26 +159,10 @@ async def test_interrupted_turn_is_available_to_next_response(monkeypatch) -> No
             if False:
                 yield b""
 
-    class FakeOutputTrack:
-        async def push_pcm16(self, pcm: bytes, sample_rate: int) -> None:
-            pass
-
-        def finish_utterance(self) -> None:
-            pass
-
-        async def wait_until_idle(self) -> None:
-            pass
-
-        def clear(self) -> None:
-            pass
-
-        async def close_queue(self) -> None:
-            pass
-
     monkeypatch.setattr(session_module, "HermesClient", FakeHermesClient)
     monkeypatch.setattr(session_module, "create_tts_session", lambda _settings: FakeTTS())
     session = VoiceBridgeSession("test-session", _settings())
-    session.output_track = FakeOutputTrack()  # type: ignore[assignment]
+    session.output_track = _FakeOutputTrack()  # type: ignore[assignment]
 
     session._schedule_response("first interrupted question", None, "turn-interrupted")
     await first_started.wait()
@@ -190,6 +175,90 @@ async def test_interrupted_turn_is_available_to_next_response(monkeypatch) -> No
         "follow-up question",
         [{"role": "user", "content": "first interrupted question"}],
     )
+
+
+async def test_multiple_assistant_messages_are_all_sent_to_tts_and_history(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    spoken: list[str] = []
+
+    class FakeHermesClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def stream_chat(
+            self,
+            _user_text: str,
+            history: list[dict[str, str]] | None = None,
+        ) -> AsyncIterator[str]:
+            yield "第一条独立回复。"
+            yield "\n\n第二条独立回复。"
+            yield "\n\n第三条独立回复。"
+
+    class FakeTTS:
+        async def synthesize_stream(self, chunks: AsyncIterator[str]) -> AsyncIterator[bytes]:
+            async for chunk in chunks:
+                spoken.append(chunk)
+            if False:
+                yield b""
+
+    monkeypatch.setattr(session_module, "HermesClient", FakeHermesClient)
+    monkeypatch.setattr(session_module, "create_tts_session", lambda _settings: FakeTTS())
+    session = VoiceBridgeSession("test-session", _settings())
+    session.output_track = _FakeOutputTrack()  # type: ignore[assignment]
+
+    await session._respond("question", None, "turn-multiple")
+    await session.close()
+
+    assert "".join(spoken) == "第一条独立回复。第二条独立回复。第三条独立回复。"
+    assert session.conversation_history == [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "第一条独立回复。\n\n第二条独立回复。\n\n第三条独立回复。"},
+    ]
+
+
+async def test_barge_in_cancels_remaining_assistant_messages(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    first_consumed = asyncio.Event()
+    release_second = asyncio.Event()
+    spoken: list[str] = []
+
+    class FakeHermesClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def stream_chat(
+            self,
+            _user_text: str,
+            history: list[dict[str, str]] | None = None,
+        ) -> AsyncIterator[str]:
+            yield "第一条会播放。"
+            first_consumed.set()
+            await release_second.wait()
+            yield "第二条不应播放。"
+
+    class FakeTTS:
+        async def synthesize_stream(self, chunks: AsyncIterator[str]) -> AsyncIterator[bytes]:
+            async for chunk in chunks:
+                spoken.append(chunk)
+            if False:
+                yield b""
+
+    monkeypatch.setattr(session_module, "HermesClient", FakeHermesClient)
+    monkeypatch.setattr(session_module, "create_tts_session", lambda _settings: FakeTTS())
+    session = VoiceBridgeSession("test-session", _settings())
+    session.output_track = _FakeOutputTrack()  # type: ignore[assignment]
+
+    session._schedule_response("question", None, "turn-interrupt-multiple")
+    await first_consumed.wait()
+    session._interrupt_response()
+    assert session._respond_task is not None
+    await session._respond_task
+    release_second.set()
+    await session.close()
+
+    assert "第二条不应播放。" not in "".join(spoken)
+    assert session.conversation_history == [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "第一条会播放。"},
+    ]
 
 
 async def test_assistant_echo_does_not_confirm_barge_in(monkeypatch) -> None:  # type: ignore[no-untyped-def]

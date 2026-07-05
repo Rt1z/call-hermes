@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 import asyncio
 import json
 import logging
+from urllib.parse import quote
 
 import httpx
 
@@ -12,8 +13,13 @@ logger = logging.getLogger("call_hermes.hermes")
 
 
 class HermesClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._settings = settings
+        self._transport = transport
 
     async def health(self) -> tuple[bool, str]:
         try:
@@ -50,8 +56,9 @@ class HermesClient:
                 finish_reason: str | None = None
                 received_done = False
                 emitted_content = False
+                streamed_content = ""
                 try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
                         async with client.stream(
                             "POST",
                             f"{self._settings.hermes_base_url.rstrip('/')}/v1/chat/completions",
@@ -59,6 +66,7 @@ class HermesClient:
                             json=payload,
                         ) as response:
                             response.raise_for_status()
+                            hermes_session_id = response.headers.get("X-Hermes-Session-Id", "").strip()
                             async for line in response.aiter_lines():
                                 if not line or not line.startswith("data: "):
                                     continue
@@ -73,6 +81,21 @@ class HermesClient:
                                 if text:
                                     emitted_content = True
                                     content_chars += len(text)
+                                    streamed_content += text
+                                    yield text
+                            if hermes_session_id:
+                                recovered = await _recover_turn_messages(
+                                    client,
+                                    self._settings,
+                                    hermes_session_id,
+                                    user_text,
+                                    streamed_text=streamed_content,
+                                )
+                                for text in recovered:
+                                    if streamed_content:
+                                        text = f"\n\n{text}"
+                                    content_chars += len(text)
+                                    streamed_content += text
                                     yield text
                     log = logger.warning if finish_reason == "length" else logger.info
                     log(
@@ -156,6 +179,101 @@ def _content_text(content: object) -> str:
         if isinstance(text, str):
             parts.append(text)
     return "".join(parts)
+
+
+async def _recover_turn_messages(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    session_id: str,
+    user_text: str,
+    *,
+    streamed_text: str,
+) -> list[str]:
+    try:
+        response = await client.get(
+            f"{settings.hermes_base_url.rstrip('/')}/api/sessions/{quote(session_id, safe='')}/messages",
+            headers=_auth_headers(settings),
+        )
+        response.raise_for_status()
+        messages = _turn_assistant_messages(response.json(), user_text)
+    except (httpx.HTTPError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Hermes transcript reconciliation unavailable session_id=%s error=%s",
+            session_id,
+            exc,
+        )
+        return []
+    missing = _missing_assistant_messages(messages, streamed_text)
+    logger.info(
+        "Hermes transcript reconciled session_id=%s assistant_messages=%d recovered=%d",
+        session_id,
+        len(messages),
+        len(missing),
+    )
+    return missing
+
+
+def _auth_headers(settings: Settings) -> dict[str, str]:
+    if not settings.hermes_api_key:
+        return {}
+    return {"Authorization": f"Bearer {settings.hermes_api_key}"}
+
+
+def _turn_assistant_messages(payload: object, user_text: str) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    raw_messages = payload.get("data")
+    if not isinstance(raw_messages, list):
+        return []
+    start = -1
+    fallback_start = -1
+    for index, message in enumerate(raw_messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        fallback_start = index
+        if _content_text(message.get("content")).strip() == user_text.strip():
+            start = index
+    if start < 0:
+        start = fallback_start
+    if start < 0:
+        return []
+    assistant_messages: list[str] = []
+    for message in raw_messages[start + 1 :]:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user":
+            break
+        if message.get("role") != "assistant":
+            continue
+        content = _content_text(message.get("content")).strip()
+        if content:
+            assistant_messages.append(content)
+    return assistant_messages
+
+
+def _missing_assistant_messages(messages: list[str], streamed_text: str) -> list[str]:
+    cursor = 0
+    missing: list[str] = []
+    for message in messages:
+        if streamed_text.startswith(message, cursor):
+            cursor += len(message)
+            continue
+        later = streamed_text.find(message, cursor)
+        if later >= 0:
+            cursor = later + len(message)
+            continue
+        available = streamed_text[cursor:]
+        overlap = 0
+        for left, right in zip(message, available, strict=False):
+            if left != right:
+                break
+            overlap += 1
+        if overlap == len(available) and overlap < len(message):
+            cursor = len(streamed_text)
+            message = message[overlap:]
+        if message.strip():
+            missing.append(message)
+    return missing
 
 
 def _retryable_error(exc: Exception) -> bool:
