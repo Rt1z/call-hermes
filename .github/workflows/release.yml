@@ -11,7 +11,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build source archive
         run: git archive --format=tar.gz --prefix=call-hermes/ -o call-hermes-${GITHUB_REF_NAME}.tar.gz HEAD
       - uses: softprops/action-gh-release@v2
