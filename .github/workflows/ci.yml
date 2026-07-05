@@ -11,6 +11,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      APP_SHARED_SECRET: ci-shared-secret-32-characters-long
+      JWT_SECRET: ci-jwt-secret-value-32-characters
+      CONVERSATION_DATABASE_PATH: /tmp/call-hermes-pytest.sqlite3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
