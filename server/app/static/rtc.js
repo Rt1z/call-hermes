@@ -393,7 +393,7 @@ export function createCallController({
       if (track) track.enabled = false;
       ui.setMuted(true);
       ui.setVoiceActive(false);
-      ui.setStatus("Mic off");
+      if (state.isCalling) ui.setStatus("Mic off");
       sendMicrophoneState();
       try {
         await applyMicrophoneTrack(state.audioSender, track, true);
@@ -412,7 +412,7 @@ export function createCallController({
       }
       state.isMuted = false;
       ui.setMuted(false);
-      ui.setStatus("Listening");
+      if (state.isCalling) ui.setStatus("Listening");
       sendMicrophoneState();
     }
     logger?.info("microphone state changed", { muted: state.isMuted, trackAttached: !state.isMuted });
