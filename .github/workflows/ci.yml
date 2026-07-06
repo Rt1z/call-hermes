@@ -17,7 +17,7 @@ jobs:
       CONVERSATION_DATABASE_PATH: /tmp/call-hermes-pytest.sqlite3
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -46,7 +46,7 @@ jobs:
     name: browser-smoke (${{ matrix.browser }})
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install -e server playwright
       - run: playwright install --with-deps ${{ matrix.browser }}
