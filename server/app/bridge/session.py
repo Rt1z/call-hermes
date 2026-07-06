@@ -302,12 +302,14 @@ class VoiceBridgeSession:
         vad_active = not auto_vad_enabled
         speech_started_at: float | None = None
         last_voice_at = time.monotonic()
+        last_transcript_at: float | None = None
         vad_preroll: deque[bytes] = deque()
         vad_preroll_bytes = 0
         vad_preroll_max_bytes = 16000 * 2 * self.settings.auto_vad_preroll_ms // 1000
         utterance = _UtteranceBuffer()
 
         def on_transcript(transcript: Transcript) -> None:
+            nonlocal last_transcript_at
             text = transcript.text.strip()
             if self._client_muted:
                 if transcript.is_final:
@@ -331,6 +333,7 @@ class VoiceBridgeSession:
                 self._turn_trace = TurnTrace(turn_id=turn_id, logger=logger)
                 self._turn_trace.mark("asr_first_partial")
             combined_text = utterance.update(text, transcript.is_final)
+            last_transcript_at = time.monotonic()
             self.events.emit("partial_transcript", text=combined_text, turn_id=turn_id)
             if transcript.is_final:
                 logger.info(
@@ -347,7 +350,9 @@ class VoiceBridgeSession:
                 )
 
         def finalize_utterance(reason: str) -> None:
+            nonlocal last_transcript_at
             text = utterance.consume().strip()
+            last_transcript_at = None
             turn_id = self._active_input_turn_id
             if not text or turn_id is None:
                 return
@@ -368,7 +373,9 @@ class VoiceBridgeSession:
             self._schedule_response(text, trace, turn_id)
 
         def discard_utterance(reason: str) -> None:
+            nonlocal last_transcript_at
             text = utterance.consume()
+            last_transcript_at = None
             turn_id = self._active_input_turn_id
             self._barge_in_confirmed = False
             self._active_input_turn_id = None
@@ -406,7 +413,7 @@ class VoiceBridgeSession:
             asr = None
             logger.info("session_id=%s asr stream stopped reason=%s", self.session_id, reason)
             self.events.emit("asr_state", state="stopped", reason=reason)
-            if reason == "vad_silence":
+            if reason in {"vad_silence", "transcript_idle"}:
                 finalize_utterance(reason)
             elif reason == "microphone_muted":
                 discard_utterance(reason)
@@ -441,6 +448,7 @@ class VoiceBridgeSession:
                         self.events.emit("vad_state", state="muted")
                     self._microphone_state_changed.clear()
                     await self._microphone_state_changed.wait()
+                    last_voice_at = time.monotonic()
                     continue
                 frame = await receive_frame_or_state_change()
                 if frame is None:
@@ -457,6 +465,27 @@ class VoiceBridgeSession:
                     vad_preroll_bytes += len(pcm)
                     while vad_preroll_bytes > vad_preroll_max_bytes and len(vad_preroll) > 1:
                         vad_preroll_bytes -= len(vad_preroll.popleft())
+                    if (
+                        vad_active
+                        and utterance.final_segment_count > 0
+                        and last_transcript_at is not None
+                        and now - last_transcript_at >= silence_seconds
+                    ):
+                        vad_active = False
+                        logger.info(
+                            "session_id=%s vad_state=silence reason=transcript_idle "
+                            "rms=%.4f threshold=%.4f",
+                            self.session_id,
+                            rms,
+                            vad_threshold,
+                        )
+                        self.events.emit(
+                            "vad_state",
+                            state="silence",
+                            reason="transcript_idle",
+                        )
+                        await stop_asr_if_needed("transcript_idle")
+                        continue
                     if rms >= vad_threshold:
                         last_voice_at = now
                         if speech_started_at is None:

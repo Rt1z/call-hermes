@@ -114,6 +114,74 @@ async def test_microphone_mute_immediately_stops_asr_and_discards_pending_transc
     assert session._respond_task is None
 
 
+async def test_final_transcript_stops_after_text_idle_despite_continuous_noise(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    asr_stopped = asyncio.Event()
+    submitted = asyncio.Event()
+    submitted_text: list[str] = []
+
+    class FakeTrack:
+        async def recv(self) -> object:
+            await asyncio.sleep(0.01)
+            return object()
+
+    class FakeResampler:
+        def __init__(self, target_rate: int) -> None:
+            self.target_rate = target_rate
+
+        def resample_to_pcm16(self, _frame: object) -> bytes:
+            return (12000).to_bytes(2, "little", signed=True) * 160
+
+    class FakeASR:
+        def __init__(self, on_transcript) -> None:  # type: ignore[no-untyped-def]
+            self.on_transcript = on_transcript
+            self.sent_final = False
+
+        async def start(self) -> None:
+            pass
+
+        async def send_pcm16(self, _pcm: bytes) -> None:
+            if not self.sent_final:
+                self.sent_final = True
+                self.on_transcript(Transcript("持续噪声不应阻止提交", True))
+
+        async def stop(self) -> None:
+            asr_stopped.set()
+
+    def create_fake_asr(_settings, on_transcript, _on_error):  # type: ignore[no-untyped-def]
+        return FakeASR(on_transcript)
+
+    monkeypatch.setattr(session_module, "PCM16Resampler", FakeResampler)
+    monkeypatch.setattr(session_module, "create_asr_session", create_fake_asr)
+    settings = Settings(
+        app_shared_secret="x" * 32,
+        jwt_secret="y" * 32,
+        auto_vad_min_speech_ms=0,
+        auto_vad_silence_ms=50,
+    )
+    session = VoiceBridgeSession("test-session", settings)
+
+    def schedule_response(text: str, _trace, _turn_id: str) -> None:  # type: ignore[no-untyped-def]
+        submitted_text.append(text)
+        submitted.set()
+
+    session._schedule_response = schedule_response  # type: ignore[method-assign]
+    consumer = asyncio.create_task(session._consume_audio(FakeTrack()))
+    await asyncio.wait_for(submitted.wait(), timeout=1)
+    await asyncio.wait_for(asr_stopped.wait(), timeout=1)
+    consumer.cancel()
+    await asyncio.gather(consumer, return_exceptions=True)
+    events = session.events.history
+    await session.close()
+
+    assert submitted_text == ["持续噪声不应阻止提交"]
+    assert any(
+        event.type == "vad_state" and event.payload.get("reason") == "transcript_idle"
+        for event in events
+    )
+
+
 async def test_network_quality_message_updates_prebuffer() -> None:
     settings = Settings(
         app_shared_secret="x" * 32,
