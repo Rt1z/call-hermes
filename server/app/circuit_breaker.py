@@ -27,7 +27,9 @@ class CircuitBreaker:
         with self._lock:
             if self._open_until > self._now():
                 remaining = self._open_until - self._now()
-                raise CircuitOpenError(f"{self.name} is temporarily unavailable; retry in {remaining:.1f}s")
+                raise CircuitOpenError(
+                    f"{self.name} is temporarily unavailable; retry in {remaining:.1f}s"
+                )
 
     def record_success(self) -> None:
         with self._lock:

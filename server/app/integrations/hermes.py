@@ -58,7 +58,9 @@ class HermesClient:
                 emitted_content = False
                 streamed_content = ""
                 try:
-                    async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
+                    async with httpx.AsyncClient(
+                        timeout=timeout, transport=self._transport
+                    ) as client:
                         async with client.stream(
                             "POST",
                             f"{self._settings.hermes_base_url.rstrip('/')}/v1/chat/completions",
@@ -66,7 +68,9 @@ class HermesClient:
                             json=payload,
                         ) as response:
                             response.raise_for_status()
-                            hermes_session_id = response.headers.get("X-Hermes-Session-Id", "").strip()
+                            hermes_session_id = response.headers.get(
+                                "X-Hermes-Session-Id", ""
+                            ).strip()
                             async for line in response.aiter_lines():
                                 if not line or not line.startswith("data: "):
                                     continue

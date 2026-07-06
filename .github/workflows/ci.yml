@@ -28,6 +28,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg shellcheck
       - run: python -m venv server/.venv && server/.venv/bin/pip install --upgrade pip && server/.venv/bin/pip install -e 'server[dev]' pip-audit bandit
       - run: server/.venv/bin/ruff check server/app server/tests scripts
+      - run: server/.venv/bin/ruff format --check server/app server/tests scripts
       - run: server/.venv/bin/pytest -q server/tests
       - run: node scripts/test_frontend.mjs
       - run: node scripts/test_auth_frontend.mjs

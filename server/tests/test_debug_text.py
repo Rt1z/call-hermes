@@ -120,6 +120,7 @@ async def test_final_transcript_stops_after_text_idle_despite_continuous_noise(
     asr_stopped = asyncio.Event()
     submitted = asyncio.Event()
     submitted_text: list[str] = []
+    asr_instances = 0
 
     class FakeTrack:
         async def recv(self) -> object:
@@ -150,6 +151,8 @@ async def test_final_transcript_stops_after_text_idle_despite_continuous_noise(
             asr_stopped.set()
 
     def create_fake_asr(_settings, on_transcript, _on_error):  # type: ignore[no-untyped-def]
+        nonlocal asr_instances
+        asr_instances += 1
         return FakeASR(on_transcript)
 
     monkeypatch.setattr(session_module, "PCM16Resampler", FakeResampler)
@@ -170,12 +173,14 @@ async def test_final_transcript_stops_after_text_idle_despite_continuous_noise(
     consumer = asyncio.create_task(session._consume_audio(FakeTrack()))
     await asyncio.wait_for(submitted.wait(), timeout=1)
     await asyncio.wait_for(asr_stopped.wait(), timeout=1)
+    await asyncio.sleep(0.1)
     consumer.cancel()
     await asyncio.gather(consumer, return_exceptions=True)
     events = session.events.history
     await session.close()
 
     assert submitted_text == ["持续噪声不应阻止提交"]
+    assert asr_instances == 1
     assert any(
         event.type == "vad_state" and event.payload.get("reason") == "transcript_idle"
         for event in events

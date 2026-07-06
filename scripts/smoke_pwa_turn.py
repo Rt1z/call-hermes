@@ -48,7 +48,9 @@ def main() -> int:
         data=auth_body,
         headers={"Content-Type": "application/json"},
     )
-    token = json.loads(urllib.request.urlopen(auth_req, timeout=10, context=ctx).read())["token"]
+    token = json.loads(
+        urllib.request.urlopen(auth_req, timeout=10, context=ctx).read()
+    )["token"]
 
     boundary = "----callhermes"
     body = b"".join(
@@ -73,7 +75,9 @@ def main() -> int:
         },
     )
     try:
-        result = json.loads(urllib.request.urlopen(turn_req, timeout=150, context=ctx).read())
+        result = json.loads(
+            urllib.request.urlopen(turn_req, timeout=150, context=ctx).read()
+        )
     except urllib.error.HTTPError as exc:
         print(f"HTTP {exc.code}: {exc.read().decode(errors='ignore')}")
         return 1

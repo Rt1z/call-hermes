@@ -1,7 +1,7 @@
 [project]
 name = "call-hermes-voice-bridge"
 version = "0.1.0"
-description = "FastAPI WebRTC voice bridge for iPhone to Hermes via Bailian ASR/TTS"
+description = "FastAPI WebRTC voice bridge for browser clients to Hermes via Bailian ASR/TTS"
 requires-python = ">=3.11"
 dependencies = [
   "aiortc>=1.9.0",
@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "playwright>=1.50.0",
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
   "ruff>=0.5.0",

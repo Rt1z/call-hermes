@@ -62,16 +62,22 @@ def verify_bearer_identity(settings: Settings, authorization: str | None) -> Ses
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        ) from exc
     session_id = payload.get("sub")
     if not isinstance(session_id, str) or not session_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject"
+        )
     device_name = payload.get("device")
     if payload.get("type", "access") != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
     return SessionIdentity(
         session_id=session_id,
-        device_name=device_name if isinstance(device_name, str) and device_name else "Unknown device",
+        device_name=device_name
+        if isinstance(device_name, str) and device_name
+        else "Unknown device",
         user_id=str(payload.get("uid") or "legacy"),
         username=str(payload.get("username") or "admin"),
         role=str(payload.get("role") or "user"),

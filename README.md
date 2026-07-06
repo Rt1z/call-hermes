@@ -264,10 +264,10 @@ node scripts/test_frontend.mjs
 服务运行时可执行不调用 ASR/TTS 的三浏览器 WebRTC 冒烟测试：
 
 ```bash
-APP_SHARED_SECRET='与 server/.env 一致的值' python3 scripts/e2e_browser_smoke.py
-APP_SHARED_SECRET='与 server/.env 一致的值' CYCLES=20 python3 scripts/e2e_stability.py
-APP_SHARED_SECRET='与 server/.env 一致的值' python3 scripts/e2e_network_adaptation.py
-APP_SHARED_SECRET='与 server/.env 一致的值' python3 scripts/e2e_session_management.py
+E2E_TEST_PASSWORD='当前管理员密码' python3 scripts/e2e_browser_smoke.py
+E2E_TEST_PASSWORD='当前管理员密码' CYCLES=20 python3 scripts/e2e_stability.py
+E2E_TEST_PASSWORD='当前管理员密码' python3 scripts/e2e_network_adaptation.py
+E2E_TEST_PASSWORD='当前管理员密码' python3 scripts/e2e_session_management.py
 ```
 
 ## 接口

@@ -66,7 +66,9 @@ class AccountStore:
                 );
                 """
             )
-            existing = connection.execute("SELECT id FROM users WHERE username = ?", (bootstrap_username,)).fetchone()
+            existing = connection.execute(
+                "SELECT id FROM users WHERE username = ?", (bootstrap_username,)
+            ).fetchone()
             if existing is None:
                 connection.execute(
                     "INSERT INTO users(id, username, password_hash, role, created_at) VALUES (?, ?, ?, 'admin', ?)",
@@ -109,11 +111,14 @@ class AccountStore:
 
     def change_password(self, user_id: str, current_password: str, new_password: str) -> bool:
         with self._connect() as connection:
-            row = connection.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+            row = connection.execute(
+                "SELECT password_hash FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
             if row is None or not _verify_password(current_password, row["password_hash"]):
                 return False
             connection.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ?", (_password_hash(new_password), user_id)
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (_password_hash(new_password), user_id),
             )
         return True
 
@@ -127,7 +132,8 @@ class AccountStore:
                 ).fetchone()
                 if row:
                     connection.execute(
-                        "UPDATE devices SET name = ?, last_seen_at = ? WHERE id = ?", (name[:200], now, device_id)
+                        "UPDATE devices SET name = ?, last_seen_at = ? WHERE id = ?",
+                        (name[:200], now, device_id),
                     )
                     return device_id
             device_id = uuid4().hex
@@ -167,7 +173,10 @@ class AccountStore:
             ).fetchone()
             if row is None or datetime.fromisoformat(row["expires_at"]) <= datetime.now(UTC):
                 return None
-            connection.execute("UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ?", (_now(), token_hash))
+            connection.execute(
+                "UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ?",
+                (_now(), token_hash),
+            )
         return dict(row)
 
     def device_active(self, user_id: str, device_id: str) -> bool:
@@ -217,7 +226,14 @@ class AccountStore:
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO audit_log(user_id, action, device_id, ip_address, details_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, action, device_id, ip_address, json.dumps(details or {}, ensure_ascii=False), _now()),
+                (
+                    user_id,
+                    action,
+                    device_id,
+                    ip_address,
+                    json.dumps(details or {}, ensure_ascii=False),
+                    _now(),
+                ),
             )
 
     def list_audit(self, user_id: str, limit: int = 100) -> list[dict[str, object]]:

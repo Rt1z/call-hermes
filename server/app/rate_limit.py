@@ -67,6 +67,10 @@ def enforce_rate_limit(request: Request, scope: str, limit: int, window: int, de
         )
     bucket.append(now)
     if len(_buckets) > 10_000:
-        stale = [bucket_key for bucket_key, values in _buckets.items() if not values or now - values[-1] > window]
+        stale = [
+            bucket_key
+            for bucket_key, values in _buckets.items()
+            if not values or now - values[-1] > window
+        ]
         for bucket_key in stale:
             _buckets.pop(bucket_key, None)

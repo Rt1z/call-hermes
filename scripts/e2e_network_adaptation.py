@@ -3,10 +3,10 @@ import asyncio
 import os
 
 from playwright.async_api import async_playwright
+from e2e_helpers import TEST_PASSWORD, start_call, stop_call
 
 
 BASE_URL = os.environ.get("BASE_URL", "https://127.0.0.1:10005").rstrip("/")
-SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 
 POOR_STATS = """(() => {
   const original = RTCPeerConnection.prototype.getStats;
@@ -29,8 +29,8 @@ POOR_STATS = """(() => {
 
 
 async def main() -> None:
-    if not SHARED_SECRET:
-        raise SystemExit("Set APP_SHARED_SECRET before running this test")
+    if not TEST_PASSWORD:
+        raise SystemExit("Set E2E_TEST_PASSWORD before running this test")
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context(ignore_https_errors=True)
@@ -50,11 +50,10 @@ async def main() -> None:
                 localStorage.setItem('hermes.sharedSecret', secret);
                 localStorage.setItem('hermes.debugMode', 'true');
             }""",
-            SHARED_SECRET,
+            TEST_PASSWORD,
         )
         await page.reload()
-        await page.click("#recordButton")
-        await page.click("#newConversationButton")
+        await start_call(page)
         quality = page.locator("#networkQuality[data-quality='poor']")
         await quality.wait_for(timeout=20_000)
         for _ in range(40):
@@ -65,7 +64,7 @@ async def main() -> None:
             raise AssertionError("adaptive source buffer did not reach 1.20 s")
         details = await page.locator("#networkQuality").get_attribute("title")
         print(f"quality=poor {details}")
-        await page.evaluate("document.querySelector('#recordButton').click()")
+        await stop_call(page)
         await context.close()
         await browser.close()
 

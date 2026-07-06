@@ -3,10 +3,10 @@ import asyncio
 import os
 
 from playwright.async_api import async_playwright
+from e2e_helpers import TEST_PASSWORD, start_call
 
 
 BASE_URL = os.environ.get("BASE_URL", "https://127.0.0.1:10005").rstrip("/")
-SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 
 
 async def connect(page) -> None:  # type: ignore[no-untyped-def]
@@ -23,17 +23,16 @@ async def connect(page) -> None:  # type: ignore[no-untyped-def]
             localStorage.setItem('hermes.sharedSecret', secret);
             localStorage.setItem('hermes.debugMode', 'true');
         }""",
-        SHARED_SECRET,
+        TEST_PASSWORD,
     )
     await page.reload()
-    await page.click("#recordButton")
-    await page.click("#newConversationButton")
+    await start_call(page)
     await page.locator("#status", has_text="Mic off").wait_for(timeout=25_000)
 
 
 async def main() -> None:
-    if not SHARED_SECRET:
-        raise SystemExit("Set APP_SHARED_SECRET before running this test")
+    if not TEST_PASSWORD:
+        raise SystemExit("Set E2E_TEST_PASSWORD before running this test")
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         first = await browser.new_page(ignore_https_errors=True)
@@ -48,7 +47,9 @@ async def main() -> None:
             other = session_rows.filter(has_not_text="This device")
             first.once("dialog", lambda dialog: asyncio.create_task(dialog.accept()))
             await other.locator("button").click()
-            await second.locator("#status", has_text="Session ended").wait_for(timeout=5_000)
+            await second.locator("#status", has_text="Session ended").wait_for(
+                timeout=5_000
+            )
             await second.locator("body:not(.calling)").wait_for(timeout=5_000)
             await session_rows.nth(1).wait_for(state="detached", timeout=5_000)
             await asyncio.sleep(6)
@@ -58,11 +59,15 @@ async def main() -> None:
             if not first.is_closed():
                 if await first.locator("body.calling").count():
                     async with first.expect_response(
-                        lambda response: response.request.method == "DELETE"
-                        and response.url.endswith("/rtc/session"),
+                        lambda response: (
+                            response.request.method == "DELETE"
+                            and response.url.endswith("/rtc/session")
+                        ),
                         timeout=3_000,
                     ):
-                        await first.evaluate("document.querySelector('#recordButton').click()")
+                        await first.evaluate(
+                            "document.querySelector('#recordButton').click()"
+                        )
             await browser.close()
 
 

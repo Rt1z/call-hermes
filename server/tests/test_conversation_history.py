@@ -211,7 +211,10 @@ async def test_multiple_assistant_messages_are_all_sent_to_tts_and_history(monke
     assert "".join(spoken) == "第一条独立回复。第二条独立回复。第三条独立回复。"
     assert session.conversation_history == [
         {"role": "user", "content": "question"},
-        {"role": "assistant", "content": "第一条独立回复。\n\n第二条独立回复。\n\n第三条独立回复。"},
+        {
+            "role": "assistant",
+            "content": "第一条独立回复。\n\n第二条独立回复。\n\n第三条独立回复。",
+        },
     ]
 
 

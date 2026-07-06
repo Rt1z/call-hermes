@@ -26,7 +26,9 @@ async def test_hermes_health_cache_coalesces_concurrent_checks(monkeypatch) -> N
     main_module.hermes_health_cached = None
     main_module.hermes_health_expires_at = 0
 
-    results = await asyncio.gather(*(main_module._cached_hermes_health(settings) for _ in range(10)))
+    results = await asyncio.gather(
+        *(main_module._cached_hermes_health(settings) for _ in range(10))
+    )
 
     assert results == [(True, "ok")] * 10
     assert calls == 1

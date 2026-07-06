@@ -5,7 +5,9 @@ from app.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 def test_circuit_breaker_opens_and_recovers() -> None:
     now = [100.0]
-    breaker = CircuitBreaker("provider", failure_threshold=3, recovery_seconds=30, now=lambda: now[0])
+    breaker = CircuitBreaker(
+        "provider", failure_threshold=3, recovery_seconds=30, now=lambda: now[0]
+    )
 
     breaker.record_failure()
     breaker.record_failure()

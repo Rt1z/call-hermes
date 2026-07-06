@@ -6,10 +6,10 @@ import ssl
 from urllib.request import urlopen
 
 from playwright.async_api import async_playwright
+from e2e_helpers import TEST_PASSWORD, start_call, stop_call
 
 
 BASE_URL = os.environ.get("BASE_URL", "https://127.0.0.1:10005").rstrip("/")
-SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 CYCLES = int(os.environ.get("CYCLES", "20"))
 
 
@@ -20,8 +20,8 @@ def active_sessions() -> int:
 
 
 async def main() -> None:
-    if not SHARED_SECRET:
-        raise SystemExit("Set APP_SHARED_SECRET before running this stability test")
+    if not TEST_PASSWORD:
+        raise SystemExit("Set E2E_TEST_PASSWORD before running this stability test")
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context(ignore_https_errors=True)
@@ -40,16 +40,18 @@ async def main() -> None:
                 localStorage.setItem('hermes.sharedSecret', secret);
                 localStorage.setItem('hermes.debugMode', 'true');
             }""",
-            SHARED_SECRET,
+            TEST_PASSWORD,
         )
         await page.reload()
         for index in range(CYCLES):
-            await page.click("#recordButton")
-            selector = "#newConversationButton" if index % 5 == 0 else "#resumeConversationButton"
-            await page.click(selector)
+            selector = (
+                "#newConversationButton"
+                if index % 5 == 0
+                else "#resumeConversationButton"
+            )
+            await start_call(page, selector)
             await page.locator("#status", has_text="Mic off").wait_for(timeout=20_000)
-            await page.evaluate("document.querySelector('#recordButton').click()")
-            await page.locator("#status", has_text="Ready").wait_for(timeout=5_000)
+            await stop_call(page)
             count = active_sessions()
             print(f"cycle={index + 1} active_sessions={count}", flush=True)
             if count != 0:

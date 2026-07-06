@@ -8,7 +8,9 @@ from typing import Protocol
 
 import dashscope
 from dashscope.audio.qwen_tts_realtime import QwenTtsRealtime, QwenTtsRealtimeCallback
-from dashscope.audio.qwen_tts_realtime.qwen_tts_realtime import AudioFormat as QwenRealtimeAudioFormat
+from dashscope.audio.qwen_tts_realtime.qwen_tts_realtime import (
+    AudioFormat as QwenRealtimeAudioFormat,
+)
 from dashscope.audio.tts_v2 import AudioFormat, ResultCallback, SpeechSynthesizer
 
 from app.config import Settings
@@ -74,7 +76,9 @@ class DashScopeTTSSession:
             tts_breaker.record_failure()
             raise
 
-    async def _synthesize_qwen_realtime(self, text_chunks: AsyncIterator[str]) -> AsyncIterator[bytes]:
+    async def _synthesize_qwen_realtime(
+        self, text_chunks: AsyncIterator[str]
+    ) -> AsyncIterator[bytes]:
         dashscope.api_key = self._settings.dashscope_api_key
         queue: asyncio.Queue[TTSQueueItem] = asyncio.Queue()
         loop = asyncio.get_running_loop()

@@ -4,10 +4,10 @@ import json
 import os
 
 from playwright.async_api import BrowserType, async_playwright
+from e2e_helpers import TEST_PASSWORD, start_call, stop_call
 
 
 BASE_URL = os.environ.get("BASE_URL", "https://127.0.0.1:10005").rstrip("/")
-SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 SELECTED_BROWSER = os.environ.get("BROWSER", "").strip().lower()
 
 
@@ -20,7 +20,9 @@ async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
         }
     browser = await engine.launch(**launch_options)
     try:
-        context = await browser.new_context(ignore_https_errors=True, service_workers="block")
+        context = await browser.new_context(
+            ignore_https_errors=True, service_workers="block"
+        )
         page = await context.new_page()
 
         init_script = """(() => {
@@ -30,7 +32,7 @@ async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
             } catch (_) {
                 // about:blank has no local storage; the script runs again on navigation.
             }
-        })()""".replace("__SHARED_SECRET__", json.dumps(SHARED_SECRET))
+        })()""".replace("__SHARED_SECRET__", json.dumps(TEST_PASSWORD))
         await page.add_init_script(init_script)
 
         async def use_host_candidates(route) -> None:  # type: ignore[no-untyped-def]
@@ -41,11 +43,9 @@ async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
 
         await page.route("**/rtc/config", use_host_candidates)
         await page.goto(BASE_URL)
-        await page.click("#recordButton")
-        await page.click("#newConversationButton")
+        await start_call(page)
         await page.locator("#status", has_text="Mic off").wait_for(timeout=45_000)
-        await page.evaluate("document.querySelector('#recordButton').click()")
-        await page.locator("#status", has_text="Ready").wait_for(timeout=5_000)
+        await stop_call(page)
         return name, "connected"
     except Exception as error:  # noqa: BLE001
         detail = f"{type(error).__name__}: {error}".replace("\n", " ")
@@ -61,8 +61,8 @@ async def run_engine(name: str, engine: BrowserType) -> tuple[str, str]:
 
 
 async def main() -> None:
-    if not SHARED_SECRET:
-        raise SystemExit("Set APP_SHARED_SECRET before running this smoke test")
+    if not TEST_PASSWORD:
+        raise SystemExit("Set E2E_TEST_PASSWORD before running this smoke test")
     async with async_playwright() as playwright:
         engines = {
             "chromium": playwright.chromium,

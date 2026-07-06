@@ -13,6 +13,7 @@ def _feed_all(*chunks: str) -> str:
 
 # --- 1. links ---
 
+
 def test_strips_link_keeps_text() -> None:
     assert normalize_for_tts("看 [文档](https://example.com) 里的细节。") == "看 文档 里的细节。"
 
@@ -26,6 +27,7 @@ def test_strips_link_in_longer_text() -> None:
 
 # --- 2. backticks ---
 
+
 def test_strips_inline_code() -> None:
     assert normalize_for_tts("调用 `print(1)` 看看。") == "调用 print(1) 看看。"
 
@@ -35,6 +37,7 @@ def test_strips_multiple_inline_codes() -> None:
 
 
 # --- 3. line-start markers ---
+
 
 def test_strips_dash_list_marker() -> None:
     text = "- 苹果\n- 香蕉\n- 樱桃"
@@ -58,6 +61,7 @@ def test_strips_indented_marker() -> None:
 
 # --- 4. bold/italic ---
 
+
 def test_strips_bold() -> None:
     assert normalize_for_tts("这是 **重点** 内容。") == "这是 重点 内容。"
 
@@ -72,6 +76,7 @@ def test_strips_bold_and_italic_combined() -> None:
 
 
 # --- 5. blank lines ---
+
 
 def test_collapses_blank_line_to_period() -> None:
     # Original sentence-ending "。" is preserved; the blank line becomes an extra "。"
@@ -94,6 +99,7 @@ def test_keeps_single_newline_as_concat() -> None:
 
 
 # --- defensive safety nets ---
+
 
 def test_silently_drops_fenced_code_block() -> None:
     text = "看下面：\n```python\nprint(1)\nprint(2)\n```\n结束。"
@@ -122,6 +128,7 @@ def test_drops_underscore_hr() -> None:
 
 # --- end-to-end ---
 
+
 def test_plain_passthrough() -> None:
     assert normalize_for_tts("你好，世界。") == "你好，世界。"
 
@@ -138,6 +145,7 @@ def test_strips_underscore_emphasis() -> None:
 
 
 # --- streaming ---
+
 
 def test_streaming_holds_partial_line() -> None:
     n = StreamingTTSNormalizer()

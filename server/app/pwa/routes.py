@@ -5,12 +5,29 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel
 
 from app.account_store import AccountStore
 from app.auth import verify_bearer_identity
-from app.config import MAX_TTS_SPEECH_RATE, MIN_TTS_SPEECH_RATE, TTS_VOICE_OPTIONS, Settings, get_settings
+from app.config import (
+    MAX_TTS_SPEECH_RATE,
+    MIN_TTS_SPEECH_RATE,
+    TTS_VOICE_OPTIONS,
+    Settings,
+    get_settings,
+)
 from app.conversation_store import ConversationStore
 from app.metrics import runtime_metrics
 from app.pwa.audio import transcode_to_wav_mono_16k_file, wav_duration_seconds
@@ -59,12 +76,16 @@ async def pwa_turn(
         identity.device_id != "legacy"
         and not account_store.device_active(identity.user_id, identity.device_id)
     ):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Device access revoked")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Device access revoked"
+        )
     session_id = identity.session_id
     active_conversation_id = conversation_id or session_id
     store = getattr(request.app.state, "conversation_store", None)
     if not isinstance(store, ConversationStore):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Conversation store unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Conversation store unavailable"
+        )
     turn_settings = _turn_settings(
         settings,
         tts_voice,
@@ -109,12 +130,16 @@ async def pwa_turn(
                 wav_path,
                 wav_duration_seconds(wav_path),
             )
-            transcript, answer, wav = await voice_turn(turn_settings, wav_path, trace, history=history)
+            transcript, answer, wav = await voice_turn(
+                turn_settings, wav_path, trace, history=history
+            )
         finally:
             try:
                 os.unlink(wav_path)
             except OSError:
-                logger.warning("turn_id=%s failed to remove temp wav %s", turn_id, wav_path, exc_info=True)
+                logger.warning(
+                    "turn_id=%s failed to remove temp wav %s", turn_id, wav_path, exc_info=True
+                )
     except Exception as exc:  # noqa: BLE001
         runtime_metrics.increment("fallback_turn_errors")
         message = friendly_error_message(exc)
@@ -168,15 +193,21 @@ def _turn_settings(
     updates: dict[str, object] = {}
     if voice is not None:
         if voice not in TTS_VOICE_OPTIONS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported TTS voice")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported TTS voice"
+            )
         updates["dashscope_tts_voice"] = voice
     if speech_rate is not None:
         if not MIN_TTS_SPEECH_RATE <= speech_rate <= MAX_TTS_SPEECH_RATE:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported TTS speech rate")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported TTS speech rate"
+            )
         updates["dashscope_tts_speech_rate"] = speech_rate
     if hermes_model is not None:
         if not 1 <= len(hermes_model) <= 100:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported Hermes model")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported Hermes model"
+            )
         updates["hermes_model"] = hermes_model
     if system_prompt is not None:
         prompt = system_prompt.strip()[:4000]
@@ -187,11 +218,15 @@ def _turn_settings(
         updates["hermes_system_prompt"] = prompt
     if max_tokens is not None:
         if not 100 <= max_tokens <= 4096:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported max tokens")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported max tokens"
+            )
         updates["hermes_max_tokens"] = max_tokens
     if history_max_turns is not None:
         if not 1 <= history_max_turns <= 100:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported history length")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported history length"
+            )
         updates["hermes_history_max_turns"] = history_max_turns
     return settings.model_copy(update=updates) if updates else settings
 
@@ -200,7 +235,10 @@ def _trim_history(messages: list[dict[str, str]], settings: Settings) -> list[di
     result = [dict(message) for message in messages]
     while len(result) > settings.hermes_history_max_turns * 2:
         del result[:2]
-    while len(result) > 2 and sum(len(message["content"]) for message in result) > settings.hermes_history_max_chars:
+    while (
+        len(result) > 2
+        and sum(len(message["content"]) for message in result) > settings.hermes_history_max_chars
+    ):
         del result[:2]
     return result
 

@@ -303,6 +303,7 @@ class VoiceBridgeSession:
         speech_started_at: float | None = None
         last_voice_at = time.monotonic()
         last_transcript_at: float | None = None
+        idle_noise_floor = 0.0
         vad_preroll: deque[bytes] = deque()
         vad_preroll_bytes = 0
         vad_preroll_max_bytes = 16000 * 2 * self.settings.auto_vad_preroll_ms // 1000
@@ -443,6 +444,7 @@ class VoiceBridgeSession:
                     vad_preroll.clear()
                     vad_preroll_bytes = 0
                     speech_started_at = None
+                    idle_noise_floor = 0.0
                     if vad_active:
                         vad_active = False
                         self.events.emit("vad_state", state="muted")
@@ -472,6 +474,8 @@ class VoiceBridgeSession:
                         and now - last_transcript_at >= silence_seconds
                     ):
                         vad_active = False
+                        speech_started_at = None
+                        idle_noise_floor = max(rms, vad_threshold)
                         logger.info(
                             "session_id=%s vad_state=silence reason=transcript_idle "
                             "rms=%.4f threshold=%.4f",
@@ -486,17 +490,26 @@ class VoiceBridgeSession:
                         )
                         await stop_asr_if_needed("transcript_idle")
                         continue
-                    if rms >= vad_threshold:
+                    trigger_threshold = vad_threshold
+                    if not vad_active and idle_noise_floor > 0:
+                        trigger_threshold = max(vad_threshold, idle_noise_floor * 1.5)
+                        if rms < trigger_threshold:
+                            idle_noise_floor = idle_noise_floor * 0.9 + rms * 0.1
+                            if rms < vad_threshold:
+                                idle_noise_floor = 0.0
+                                trigger_threshold = vad_threshold
+                    if rms >= trigger_threshold:
                         last_voice_at = now
                         if speech_started_at is None:
                             speech_started_at = now
                         if not vad_active and now - speech_started_at >= min_speech_seconds:
                             vad_active = True
+                            idle_noise_floor = 0.0
                             logger.info(
                                 "session_id=%s vad_state=speech rms=%.4f threshold=%.4f",
                                 self.session_id,
                                 rms,
-                                vad_threshold,
+                                trigger_threshold,
                             )
                             self.events.emit("vad_state", state="speech")
                             await start_asr_if_needed()

@@ -73,7 +73,9 @@ class OfferRequest(BaseModel):
     tts_voice: str | None = None
     tts_speech_rate: float | None = None
     vad_silence_ms: int | None = None
-    hermes_model: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[\w./:-]+$")
+    hermes_model: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=r"^[\w./:-]+$"
+    )
     system_prompt: str | None = Field(default=None, min_length=1, max_length=4000)
     max_tokens: int | None = Field(default=None, ge=100, le=4096)
     history_max_turns: int | None = Field(default=None, ge=1, le=100)
@@ -306,8 +308,8 @@ async def prometheus_metrics(
     lines.append(f"call_hermes_active_sessions {len(sessions)}")
     for name, breaker in (("hermes", hermes_breaker), ("asr", asr_breaker), ("tts", tts_breaker)):
         state = breaker.snapshot()
-        lines.append(f"call_hermes_circuit_open{{provider=\"{name}\"}} {int(bool(state['open']))}")
-        lines.append(f"call_hermes_circuit_failures{{provider=\"{name}\"}} {state['failures']}")
+        lines.append(f'call_hermes_circuit_open{{provider="{name}"}} {int(bool(state["open"]))}')
+        lines.append(f'call_hermes_circuit_failures{{provider="{name}"}} {state["failures"]}')
     return "\n".join(lines) + "\n"
 
 
@@ -383,7 +385,9 @@ def _require_monitor_access(
     expected = settings.monitoring_token
     supplied = authorization.removeprefix("Bearer ").strip() if authorization else ""
     if not expected or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Monitoring access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Monitoring access denied"
+        )
 
 
 def _active_identity(settings: Settings, authorization: str | None):  # type: ignore[no-untyped-def]
@@ -391,13 +395,17 @@ def _active_identity(settings: Settings, authorization: str | None):  # type: ig
     if identity.device_id != "legacy" and not _account_store().device_active(
         identity.user_id, identity.device_id
     ):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Device access revoked")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Device access revoked"
+        )
     return identity
 
 
 def _account_store() -> AccountStore:
     if account_store is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Account store unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Account store unavailable"
+        )
     return account_store
 
 
@@ -417,11 +425,15 @@ async def auth_session(
     if not hmac.compare_digest(body.shared_secret, settings.app_shared_secret):
         record_auth_failure(request)
         _account_store().audit("login_failed", ip_address=_client_ip(request))
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid shared secret")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid shared secret"
+        )
     user = _account_store().get_user(settings.bootstrap_admin_username)
     if user is None:
         record_auth_failure(request)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Bootstrap user unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Bootstrap user unavailable"
+        )
     clear_auth_failures(request)
     return _complete_login(request, response, settings, user, body.device_name, None)
 
@@ -438,9 +450,13 @@ async def auth_login(
     if user is None:
         record_auth_failure(request)
         _account_store().audit(
-            "login_failed", ip_address=_client_ip(request), details={"username": body.username[:100]}
+            "login_failed",
+            ip_address=_client_ip(request),
+            details={"username": body.username[:100]},
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password"
+        )
     clear_auth_failures(request)
     return _complete_login(request, response, settings, user, body.device_name, body.device_id)
 
@@ -453,11 +469,15 @@ async def auth_refresh(
     hermes_refresh: Annotated[str | None, Cookie()] = None,
 ) -> dict[str, str]:
     if not hermes_refresh:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token"
+        )
     refreshed = _account_store().consume_refresh_token(hermes_refresh)
     if refreshed is None:
         _clear_refresh_cookie(response)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
+        )
     refresh_token, refresh_expires = _account_store().issue_refresh_token(
         refreshed["user_id"], refreshed["device_id"], settings.refresh_token_ttl_days
     )
@@ -510,7 +530,11 @@ async def revoke_authorized_device(
     identity = _active_identity(settings, authorization)
     revoked = _account_store().revoke_device(identity.user_id, device_id)
     _account_store().audit(
-        "device_revoked", identity.user_id, device_id, _client_ip(request), {"by": identity.device_id}
+        "device_revoked",
+        identity.user_id,
+        device_id,
+        _client_ip(request),
+        {"by": identity.device_id},
     )
     for active_id, session in list(sessions.items()):
         if getattr(session, "device_id", None) == device_id:
@@ -552,9 +576,15 @@ async def create_user(
     try:
         user = _account_store().create_user(body.username, body.password, body.role)
     except sqlite3.IntegrityError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists") from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Username already exists"
+        ) from exc
     _account_store().audit(
-        "user_created", identity.user_id, identity.device_id, _client_ip(request), {"username": body.username}
+        "user_created",
+        identity.user_id,
+        identity.device_id,
+        _client_ip(request),
+        {"username": body.username},
     )
     return user
 
@@ -567,9 +597,15 @@ async def change_password(
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, bool]:
     identity = _active_identity(settings, authorization)
-    if not _account_store().change_password(identity.user_id, body.current_password, body.new_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
-    _account_store().audit("password_changed", identity.user_id, identity.device_id, _client_ip(request))
+    if not _account_store().change_password(
+        identity.user_id, body.current_password, body.new_password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect"
+        )
+    _account_store().audit(
+        "password_changed", identity.user_id, identity.device_id, _client_ip(request)
+    )
     return {"ok": True}
 
 
@@ -581,9 +617,13 @@ async def client_log(
 ) -> dict[str, bool]:
     enforce_client_log_rate_limit(request, settings)
     if len(json.dumps(body.details, ensure_ascii=False, default=str)) > 8192:
-        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Client log details too large")
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Client log details too large"
+        )
     level = body.level.lower()
-    log_method = logger.warning if level == "warn" else logger.error if level == "error" else logger.info
+    log_method = (
+        logger.warning if level == "warn" else logger.error if level == "error" else logger.info
+    )
     log_method(
         "client level=%s message=%s details=%s url=%s user_agent=%s ts=%s",
         body.level,
@@ -600,7 +640,9 @@ def _redact_log_value(value: object) -> object:
     sensitive = {"authorization", "token", "password", "secret", "api_key", "cookie"}
     if isinstance(value, dict):
         return {
-            key: "[REDACTED]" if any(part in key.lower() for part in sensitive) else _redact_log_value(item)
+            key: "[REDACTED]"
+            if any(part in key.lower() for part in sensitive)
+            else _redact_log_value(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -761,7 +803,9 @@ def _record_session_metric(name: str, value: float) -> None:
 
 def _conversation_store() -> ConversationStore:
     if conversation_store is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Conversation store unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Conversation store unavailable"
+        )
     return conversation_store
 
 
@@ -828,12 +872,18 @@ async def _cleanup_stale_sessions(settings: Settings) -> None:
     while True:
         await asyncio.sleep(10)
         cutoff = time.monotonic() - timeout
-        stale = [(session_id, session) for session_id, session in sessions.items() if session.last_activity_at < cutoff]
+        stale = [
+            (session_id, session)
+            for session_id, session in sessions.items()
+            if session.last_activity_at < cutoff
+        ]
         for session_id, session in stale:
             if sessions.get(session_id) is not session:
                 continue
             sessions.pop(session_id, None)
-            logger.warning("stale session removed session_id=%s idle_timeout=%ss", session_id, timeout)
+            logger.warning(
+                "stale session removed session_id=%s idle_timeout=%ss", session_id, timeout
+            )
             runtime_metrics.increment("rtc_sessions_stale")
             await session.close()
 
@@ -873,7 +923,9 @@ def _settings_for_offer(settings: Settings, offer: OfferRequest) -> Settings:
     return settings.model_copy(update=update)
 
 
-def _apply_tts_overrides(settings: Settings, offer: OfferRequest, update: dict[str, object]) -> None:
+def _apply_tts_overrides(
+    settings: Settings, offer: OfferRequest, update: dict[str, object]
+) -> None:
     tts_voice = offer.tts_voice
     tts_speech_rate = offer.tts_speech_rate
     if tts_voice is not None:

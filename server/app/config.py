@@ -169,7 +169,9 @@ class Settings(BaseSettings):
     def _ice_servers(self, turn_urls: str) -> list[dict[str, object]]:
         servers: list[dict[str, object]] = []
         if self.ice_stun_urls:
-            servers.append({"urls": [url.strip() for url in self.ice_stun_urls.split(",") if url.strip()]})
+            servers.append(
+                {"urls": [url.strip() for url in self.ice_stun_urls.split(",") if url.strip()]}
+            )
         if turn_urls:
             servers.append(
                 {
@@ -183,7 +185,9 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         if self.cors_allow_origins:
-            return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+            return [
+                origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()
+            ]
         return [str(self.public_base_url).rstrip("/")]
 
     @property
@@ -203,11 +207,16 @@ class Settings(BaseSettings):
         checks: dict[str, dict[str, object]] = {
             "dashscope_api_key": {
                 "ok": bool(self.use_mock_asr and self.use_mock_tts) or bool(self.dashscope_api_key),
-                "detail": "configured" if self.dashscope_api_key else "missing unless both mocks are enabled",
+                "detail": "configured"
+                if self.dashscope_api_key
+                else "missing unless both mocks are enabled",
             },
             "hermes_base_url": {"ok": bool(self.hermes_base_url), "detail": self.hermes_base_url},
             "jwt_secret": {"ok": len(self.jwt_secret) >= 16, "detail": "min_length=16"},
-            "app_shared_secret": {"ok": len(self.app_shared_secret) >= 16, "detail": "min_length=16"},
+            "app_shared_secret": {
+                "ok": len(self.app_shared_secret) >= 16,
+                "detail": "min_length=16",
+            },
             "turn": {
                 "ok": self.turn_configured,
                 "detail": self.turn_config_warning or "configured",
@@ -251,7 +260,9 @@ def _ssl_cert_check(cert_file: str) -> dict[str, object]:
         return {"ok": False, "detail": f"{cert_file} missing"}
     try:
         decoded = ssl._ssl._test_decode_cert(str(path))  # type: ignore[attr-defined]
-        not_after = datetime.strptime(decoded["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=UTC)
+        not_after = datetime.strptime(decoded["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(
+            tzinfo=UTC
+        )
     except Exception as exc:
         return {"ok": False, "detail": f"{cert_file} unreadable: {exc}"}
     now = datetime.now(UTC)

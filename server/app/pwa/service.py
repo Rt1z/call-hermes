@@ -17,7 +17,9 @@ from app.pwa.trace import TurnTrace
 logger = logging.getLogger("call_hermes.pwa.service")
 
 
-async def transcribe_wav_file(settings: Settings, wav_path: str, trace: TurnTrace | None = None) -> str:
+async def transcribe_wav_file(
+    settings: Settings, wav_path: str, trace: TurnTrace | None = None
+) -> str:
     if settings.use_mock_asr:
         return "你好 Hermes，请简单介绍一下你自己。"
 
@@ -132,7 +134,9 @@ async def voice_turn(
     )
     with trace.stage("asr"):
         transcript = await transcribe_wav_file(settings, wav_path, trace)
-    logger.info("turn_id=%s voice turn asr complete transcript_chars=%d", trace.turn_id, len(transcript))
+    logger.info(
+        "turn_id=%s voice turn asr complete transcript_chars=%d", trace.turn_id, len(transcript)
+    )
     with trace.stage("hermes"):
         answer = await ask_hermes(settings, transcript, history=history)
     logger.info("turn_id=%s voice turn hermes complete answer_len=%d", trace.turn_id, len(answer))

@@ -27,6 +27,8 @@ def test_client_log_rejects_oversized_message() -> None:
 
 def test_client_log_rejects_oversized_details() -> None:
     with TestClient(app) as client:
-        response = client.post("/client/log", json={"message": "large", "details": {"value": "x" * 9000}})
+        response = client.post(
+            "/client/log", json={"message": "large", "details": {"value": "x" * 9000}}
+        )
 
     assert response.status_code == 413

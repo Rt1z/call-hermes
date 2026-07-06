@@ -67,9 +67,7 @@ def test_finds_missing_and_partially_streamed_assistant_messages() -> None:
     assert _missing_assistant_messages(messages, "第一条完整消息。第三条完整消息。") == [
         "第二条完整消息。"
     ]
-    assert _missing_assistant_messages(messages[:2], "第一条完整消息。第二条") == [
-        "完整消息。"
-    ]
+    assert _missing_assistant_messages(messages[:2], "第一条完整消息。第二条") == ["完整消息。"]
 
 
 async def test_stream_chat_recovers_unstreamed_assistant_message_from_transcript() -> None:
