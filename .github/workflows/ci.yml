@@ -16,7 +16,7 @@ jobs:
       JWT_SECRET: ci-jwt-secret-value-32-characters
       CONVERSATION_DATABASE_PATH: /tmp/call-hermes-pytest.sqlite3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -45,7 +45,7 @@ jobs:
         browser: [chromium, firefox, webkit]
     name: browser-smoke (${{ matrix.browser }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - run: pip install -e server playwright
