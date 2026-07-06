@@ -39,6 +39,18 @@ export function handleBridgeEvent(raw, context) {
     ui.setStatus("Thinking");
     return;
   }
+  if (event.type === "transcript_discarded") {
+    const turnId = event.turn_id || state.currentTurnId;
+    ui.discardTurn(turnId);
+    if (state.currentTurnId === turnId) {
+      state.currentTurnId = null;
+      state.currentTranscript = "";
+      state.pendingTurn = false;
+    }
+    ui.setStatus(state.isMuted ? "Mic off" : "Listening");
+    ui.setDebug("Muted; pending transcript discarded");
+    return;
+  }
   if (event.type === "thinking") {
     const turnId = resolveTurnId(event, state);
     state.currentTranscript = event.text || state.currentTranscript;
@@ -49,7 +61,7 @@ export function handleBridgeEvent(raw, context) {
   }
   if (event.type === "answer_delta") {
     const turnId = resolveTurnId(event, state);
-    const answer = `${state.turnAnswers.get(turnId) || ""}${event.text || ""}`;
+    const answer = `${state.turnAnswers.get(turnId) || ""}${event.text || ""}`.replace(/^\s+/, "");
     state.turnAnswers.set(turnId, answer);
     state.currentAnswer = answer;
     ui.setTurnAnswer(turnId, answer);

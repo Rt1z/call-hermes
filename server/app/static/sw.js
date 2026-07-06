@@ -1,4 +1,4 @@
-const CACHE_NAME = "call-hermes-shell-v43";
+const CACHE_NAME = "call-hermes-shell-v44";
 const SHELL = ["/", "/styles.css", "/app.js", "/auth.js", "/rtc.js", "/events.js", "/ui.js", "/client-log.js", "/offline.html", "/icons/icon.svg"];
 
 self.addEventListener("install", (event) => {

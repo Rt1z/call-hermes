@@ -9,6 +9,11 @@ const NETWORK_LOSS_WINDOW_MS = 12000;
 const NETWORK_MIN_PACKET_SAMPLE = 50;
 const QUALITY_RANK = { unknown: -1, excellent: 0, good: 1, fair: 2, poor: 3, offline: 4 };
 
+export async function applyMicrophoneTrack(sender, track, muted) {
+  if (track) track.enabled = !muted;
+  if (sender) await sender.replaceTrack(muted ? null : track);
+}
+
 export function createCallController({
   auth,
   ui,
@@ -21,6 +26,7 @@ export function createCallController({
 }) {
   const state = {
     peerConnection: null,
+    audioSender: null,
     eventsChannel: null,
     inputStream: null,
     callStartedAt: 0,
@@ -124,7 +130,7 @@ export function createCallController({
 
       if (debugMode) {
         state.peerConnection.addTransceiver("audio", { direction: "recvonly" });
-        setMicrophoneMuted(true);
+        await setMicrophoneMuted(true);
         await updateDeviceStatus();
       } else {
         logger?.info("getUserMedia start");
@@ -133,11 +139,11 @@ export function createCallController({
           tracks: state.inputStream.getAudioTracks().length,
           trackLabel: state.inputStream.getAudioTracks()[0]?.label || "",
         });
-        setMicrophoneMuted(false);
+        await setMicrophoneMuted(false);
         state.meter = startVoiceMeter(state.inputStream, ui);
         state.inputStream.getAudioTracks().forEach((track) => {
           bindInputTrackEvents(track);
-          state.peerConnection.addTrack(track, state.inputStream);
+          state.audioSender = state.peerConnection.addTrack(track, state.inputStream);
         });
         await updateDeviceStatus();
       }
@@ -273,6 +279,7 @@ export function createCallController({
       state.peerConnection.close();
       state.peerConnection = null;
     }
+    state.audioSender = null;
     if (state.inputStream) {
       stopVoiceMeter(state.meter, ui);
       state.meter = null;
@@ -375,24 +382,41 @@ export function createCallController({
     onFallback?.("WebRTC failed after retrying; HTTPS fallback active.");
   }
 
-  function toggleMicrophone() {
-    setMicrophoneMuted(!state.isMuted);
-    ui.setStatus(state.isMuted ? "Mic off" : "Listening");
+  async function toggleMicrophone() {
+    await setMicrophoneMuted(!state.isMuted);
   }
 
-  function setMicrophoneMuted(nextIsMuted) {
-    state.isMuted = nextIsMuted;
-    logger?.info("microphone state changed", { muted: state.isMuted });
-    if (state.inputStream) {
-      state.inputStream.getAudioTracks().forEach((track) => {
-        track.enabled = !state.isMuted;
-      });
-    }
-    ui.setMuted(state.isMuted);
-    if (state.isMuted) {
+  async function setMicrophoneMuted(nextIsMuted) {
+    const track = state.inputStream?.getAudioTracks()[0] || null;
+    if (nextIsMuted) {
+      state.isMuted = true;
+      if (track) track.enabled = false;
+      ui.setMuted(true);
       ui.setVoiceActive(false);
+      ui.setStatus("Mic off");
+      sendMicrophoneState();
+      try {
+        await applyMicrophoneTrack(state.audioSender, track, true);
+      } catch (error) {
+        logger?.warn("failed to detach muted microphone track", errorDetails(error));
+      }
+    } else {
+      try {
+        if (track) {
+          await applyMicrophoneTrack(state.audioSender, track, false);
+        }
+      } catch (error) {
+        logger?.error("failed to restore microphone track", errorDetails(error));
+        ui.setDebug("Unable to restore microphone.");
+        return false;
+      }
+      state.isMuted = false;
+      ui.setMuted(false);
+      ui.setStatus("Listening");
+      sendMicrophoneState();
     }
-    sendMicrophoneState();
+    logger?.info("microphone state changed", { muted: state.isMuted, trackAttached: !state.isMuted });
+    return true;
   }
 
   function updateCallDuration() {
@@ -706,13 +730,13 @@ export function createCallController({
       if (!nextTrack) {
         throw new Error("The selected microphone did not provide an audio track.");
       }
-      const sender = state.peerConnection?.getSenders().find((item) => item.track?.kind === "audio");
+      const sender = state.audioSender;
       if (!sender) {
         throw new Error("The active call has no microphone sender.");
       }
       nextTrack.enabled = !state.isMuted;
       bindInputTrackEvents(nextTrack);
-      await sender.replaceTrack(nextTrack);
+      await applyMicrophoneTrack(sender, nextTrack, state.isMuted);
 
       const previousStream = state.inputStream;
       stopVoiceMeter(state.meter, ui);

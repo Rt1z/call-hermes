@@ -119,6 +119,7 @@ class VoiceBridgeSession:
         self._echo_playback_cursor = 0.0
         self._input_echo_likelihood = 0.0
         self._client_muted = False
+        self._microphone_state_changed = asyncio.Event()
         self._barge_in_confirmed = False
         self._on_closed = on_closed
         self._on_history_updated = on_history_updated
@@ -222,6 +223,7 @@ class VoiceBridgeSession:
         message_type = payload.get("type")
         if message_type == "microphone_muted":
             self._client_muted = bool(payload.get("muted"))
+            self._microphone_state_changed.set()
             logger.info("session_id=%s microphone_muted=%s", self.session_id, self._client_muted)
             self.events.emit("microphone", muted=self._client_muted)
             return
@@ -307,6 +309,13 @@ class VoiceBridgeSession:
 
         def on_transcript(transcript: Transcript) -> None:
             text = transcript.text.strip()
+            if self._client_muted:
+                if transcript.is_final:
+                    logger.info(
+                        "session_id=%s ignored ASR final received after microphone muted",
+                        self.session_id,
+                    )
+                return
             if not self._accept_input_while_speaking(text):
                 if transcript.is_final:
                     logger.info(
@@ -358,6 +367,22 @@ class VoiceBridgeSession:
             self.events.emit("final_transcript", text=text, turn_id=turn_id)
             self._schedule_response(text, trace, turn_id)
 
+        def discard_utterance(reason: str) -> None:
+            text = utterance.consume()
+            turn_id = self._active_input_turn_id
+            self._barge_in_confirmed = False
+            self._active_input_turn_id = None
+            self._turn_trace = None
+            if turn_id is not None:
+                self.events.emit("transcript_discarded", turn_id=turn_id, reason=reason)
+            if text:
+                logger.info(
+                    "session_id=%s utterance discarded reason=%s text_chars=%d",
+                    self.session_id,
+                    reason,
+                    len(text),
+                )
+
         def on_error(message: str) -> None:
             self.events.emit("error", source="asr", message=message)
 
@@ -381,13 +406,31 @@ class VoiceBridgeSession:
             asr = None
             logger.info("session_id=%s asr stream stopped reason=%s", self.session_id, reason)
             self.events.emit("asr_state", state="stopped", reason=reason)
-            if reason in {"vad_silence", "microphone_muted"}:
+            if reason == "vad_silence":
                 finalize_utterance(reason)
+            elif reason == "microphone_muted":
+                discard_utterance(reason)
+
+        async def receive_frame_or_state_change():  # type: ignore[no-untyped-def]
+            frame_task = asyncio.create_task(track.recv())
+            state_task = asyncio.create_task(self._microphone_state_changed.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {frame_task, state_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if state_task in done:
+                    self._microphone_state_changed.clear()
+                    return None
+                return frame_task.result()
+            finally:
+                for task in (frame_task, state_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(frame_task, state_task, return_exceptions=True)
 
         try:
             while True:
-                frame = await track.recv()
-                self.touch()
                 if self._client_muted:
                     await stop_asr_if_needed("microphone_muted")
                     vad_preroll.clear()
@@ -396,7 +439,13 @@ class VoiceBridgeSession:
                     if vad_active:
                         vad_active = False
                         self.events.emit("vad_state", state="muted")
+                    self._microphone_state_changed.clear()
+                    await self._microphone_state_changed.wait()
                     continue
+                frame = await receive_frame_or_state_change()
+                if frame is None:
+                    continue
+                self.touch()
                 pcm = resampler.resample_to_pcm16(frame)
                 if not pcm:
                     continue
@@ -546,6 +595,9 @@ class VoiceBridgeSession:
                     user_text,
                     history=self._conversation_history,
                 ):
+                    chunk = chunk.lstrip() if not assistant_text else chunk
+                    if not chunk:
+                        continue
                     if not hermes_first_marked and trace is not None:
                         trace.mark("hermes_first_token")
                         hermes_first_marked = True

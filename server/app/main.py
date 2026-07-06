@@ -616,6 +616,7 @@ async def rtc_offer(
 ) -> OfferResponse:
     identity = _active_identity(settings, authorization)
     session_id = identity.session_id
+    stale_device_sessions: list[VoiceBridgeSession] = []
     async with session_registry_lock:
         if session_id in session_ids_in_flight:
             raise HTTPException(
@@ -623,8 +624,19 @@ async def rtc_offer(
                 detail="A connection attempt is already in progress for this session",
             )
         old = sessions.pop(session_id, None)
+        for active_session_id, active_session in list(sessions.items()):
+            if (
+                active_session.user_id == identity.user_id
+                and active_session.device_id == identity.device_id
+            ):
+                sessions.pop(active_session_id, None)
+                stale_device_sessions.append(active_session)
         projected_sessions = len(set(sessions) | session_ids_in_flight | {session_id})
-        if old is None and projected_sessions > settings.max_concurrent_sessions:
+        if (
+            old is None
+            and not stale_device_sessions
+            and projected_sessions > settings.max_concurrent_sessions
+        ):
             runtime_metrics.increment("rtc_sessions_rejected_capacity")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -637,6 +649,14 @@ async def rtc_offer(
     store = _conversation_store()
     session: VoiceBridgeSession | None = None
     try:
+        for stale_session in stale_device_sessions:
+            logger.info(
+                "closing stale device session old_session_id=%s new_session_id=%s device_id=%s",
+                stale_session.session_id,
+                session_id,
+                identity.device_id,
+            )
+            await stale_session.close()
         if body.preserve_conversation:
             conversation_history = (
                 old.conversation_history if old else store.load(conversation_id, identity.user_id)

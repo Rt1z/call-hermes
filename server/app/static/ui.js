@@ -296,11 +296,20 @@ export function createUi() {
       const turn = ensureTurn(turnId);
       updateConversation(() => {
         turn.assistantPanel.hidden = false;
-        turn.assistantText.textContent = text || "…";
+        turn.assistantText.textContent = String(text || "").replace(/^\s+/, "") || "…";
         delete turn.assistantText.dataset.placeholder;
         turn.root.classList.remove("thinking", "interrupted");
         turn.root.classList.add("streaming");
       });
+    },
+    discardTurn(turnId) {
+      const id = String(turnId || "");
+      const turn = turns.get(id);
+      if (!turn) {
+        return;
+      }
+      updateConversation(() => turn.root.remove());
+      turns.delete(id);
     },
     setTurnInterrupted(turnId) {
       const turn = turns.get(turnId);

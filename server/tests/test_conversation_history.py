@@ -189,7 +189,7 @@ async def test_multiple_assistant_messages_are_all_sent_to_tts_and_history(monke
             _user_text: str,
             history: list[dict[str, str]] | None = None,
         ) -> AsyncIterator[str]:
-            yield "第一条独立回复。"
+            yield "\n\n第一条独立回复。"
             yield "\n\n第二条独立回复。"
             yield "\n\n第三条独立回复。"
 

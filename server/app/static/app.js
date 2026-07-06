@@ -388,14 +388,14 @@ ui.recordButton.addEventListener("click", async () => {
   await call.startCall({ preserveConversation, conversationId: config.conversationId });
 });
 
-ui.micButton.addEventListener("click", () => {
+ui.micButton.addEventListener("click", async () => {
   clientLogger.info("mic button tapped", { fallbackActive: fallback.isActive, calling: call.isCalling });
   if (fallback.isActive) {
     fallback.toggleRecording();
     return;
   }
   if (call.isCalling) {
-    call.toggleMicrophone();
+    await call.toggleMicrophone();
   }
 });
 

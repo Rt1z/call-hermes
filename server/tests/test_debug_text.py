@@ -1,5 +1,7 @@
+import asyncio
 import json
 
+import app.bridge.session as session_module
 from app.bridge.session import (
     VoiceBridgeSession,
     _UtteranceBuffer,
@@ -7,6 +9,7 @@ from app.bridge.session import (
     _text_similarity,
 )
 from app.config import Settings
+from app.integrations.asr import Transcript
 
 
 async def test_debug_text_message_submits_text() -> None:
@@ -43,6 +46,72 @@ async def test_microphone_muted_message_updates_session_state() -> None:
 
     assert session._client_muted is False
     assert events[-1] == ("microphone", {"muted": False})
+
+
+async def test_microphone_mute_immediately_stops_asr_and_discards_pending_transcript(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    audio_sent = asyncio.Event()
+    asr_stopped = asyncio.Event()
+
+    class FakeTrack:
+        def __init__(self) -> None:
+            self.frames = 0
+
+        async def recv(self) -> object:
+            self.frames += 1
+            if self.frames == 1:
+                return object()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    class FakeResampler:
+        def __init__(self, target_rate: int) -> None:
+            self.target_rate = target_rate
+
+        def resample_to_pcm16(self, _frame: object) -> bytes:
+            return (12000).to_bytes(2, "little", signed=True) * 1600
+
+    class FakeASR:
+        def __init__(self, on_transcript) -> None:  # type: ignore[no-untyped-def]
+            self.on_transcript = on_transcript
+
+        async def start(self) -> None:
+            pass
+
+        async def send_pcm16(self, _pcm: bytes) -> None:
+            self.on_transcript(Transcript("不应在静音后提交", False))
+            audio_sent.set()
+
+        async def stop(self) -> None:
+            self.on_transcript(Transcript("不应在静音后提交", True))
+            asr_stopped.set()
+
+    def create_fake_asr(_settings, on_transcript, _on_error):  # type: ignore[no-untyped-def]
+        return FakeASR(on_transcript)
+
+    monkeypatch.setattr(session_module, "PCM16Resampler", FakeResampler)
+    monkeypatch.setattr(session_module, "create_asr_session", create_fake_asr)
+    settings = Settings(
+        app_shared_secret="x" * 32,
+        jwt_secret="y" * 32,
+        auto_vad_min_speech_ms=0,
+    )
+    session = VoiceBridgeSession("test-session", settings)
+    consumer = asyncio.create_task(session._consume_audio(FakeTrack()))
+    await asyncio.wait_for(audio_sent.wait(), timeout=1)
+
+    await session._handle_client_message(json.dumps({"type": "microphone_muted", "muted": True}))
+    await asyncio.wait_for(asr_stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+    consumer.cancel()
+    await asyncio.gather(consumer, return_exceptions=True)
+    event_types = [event.type for event in session.events.history]
+    await session.close()
+
+    assert "transcript_discarded" in event_types
+    assert "final_transcript" not in event_types
+    assert session._respond_task is None
 
 
 async def test_network_quality_message_updates_prebuffer() -> None:
