@@ -84,6 +84,9 @@ export function handleBridgeEvent(raw, context) {
     return;
   }
   if (event.type === "microphone") {
+    if (!state.isCalling) {
+      return;
+    }
     state.isMuted = Boolean(event.muted);
     ui.setMuted(state.isMuted);
     ui.setStatus(state.isMuted ? "Mic off" : "Listening");

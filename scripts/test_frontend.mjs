@@ -48,6 +48,7 @@ assert.deepEqual(replacements, [null, microphoneTrack]);
 const renderedAnswers = [];
 const discardedTurns = [];
 const eventState = {
+  isCalling: true,
   currentTurnId: null,
   currentTranscript: "pending",
   pendingTurn: true,
@@ -71,5 +72,12 @@ handleBridgeEvent(JSON.stringify({ type: "transcript_discarded", turn_id: "turn-
 });
 assert.deepEqual(discardedTurns, ["turn-1"]);
 assert.equal(eventState.pendingTurn, false);
+eventState.isCalling = false;
+eventState.isMuted = false;
+handleBridgeEvent(JSON.stringify({ type: "microphone", muted: true }), {
+  state: eventState,
+  ui: eventUi,
+});
+assert.equal(eventState.isMuted, false);
 
 console.log("Frontend network tests passed");
